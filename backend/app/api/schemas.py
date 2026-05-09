@@ -5,6 +5,21 @@ from pydantic import BaseModel
 from app.models.models import PromptCategory, QueryStatus
 
 
+# --- Auth ---
+class UserRegister(BaseModel):
+    username: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- Projects ---
 class ProjectCreate(BaseModel):
     name: str
@@ -15,6 +30,7 @@ class ProjectOut(BaseModel):
     id: int
     name: str
     industry: str
+    user_id: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -37,6 +53,12 @@ class BrandOut(BaseModel):
 
 
 # --- Prompts ---
+class PromptCreate(BaseModel):
+    text: str
+    category: PromptCategory = PromptCategory.RECOMMEND
+    is_auto_generated: bool = True
+
+
 class PromptOut(BaseModel):
     id: int
     text: str
@@ -49,7 +71,7 @@ class PromptOut(BaseModel):
 # --- Audits ---
 class AuditCreate(BaseModel):
     project_id: int
-    platforms: list[str] = ["deepseek", "qwen"]
+    platforms: list[str] = ["deepseek", "qwen", "doubao", "kimi", "wenxin", "hunyuan"]
 
 
 class AuditOut(BaseModel):
@@ -95,3 +117,46 @@ class ReportOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# --- Scheduled Jobs ---
+class ScheduledJobCreate(BaseModel):
+    project_id: int
+    cron_expression: str  # e.g. "0 22 * * *" = every day at 22:00
+    platforms: list[str] = ["deepseek", "qwen", "doubao", "kimi", "wenxin", "hunyuan"]
+
+
+class ScheduledJobOut(BaseModel):
+    id: int
+    project_id: int
+    cron_expression: str
+    platforms_json: list[str]
+    is_active: bool
+    last_run_at: datetime | None = None
+    last_audit_id: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# --- Suggestions ---
+class SuggestionOut(BaseModel):
+    id: int
+    project_id: int
+    report_id: int
+    category: str
+    title: str
+    description: str
+    priority: str
+    is_resolved: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# --- Prompt Generation ---
+class PromptGenerateRequest(BaseModel):
+    project_id: int
+    industry: str = ""
+    brand_name: str = ""
+    count: int = 10

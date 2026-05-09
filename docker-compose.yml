@@ -1,27 +1,39 @@
 version: "3.8"
 
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.0
     environment:
-      POSTGRES_USER: aiscope
-      POSTGRES_PASSWORD: aiscope
-      POSTGRES_DB: aiscope
+      MYSQL_USER: aiscope
+      MYSQL_PASSWORD: aiscope
+      MYSQL_DATABASE: aiscope
+      MYSQL_ROOT_PASSWORD: rootpassword
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     environment:
-      AISCOPE_DATABASE_URL: postgresql+asyncpg://aiscope:aiscope@postgres:5432/aiscope
+      AISCOPE_DATABASE_URL: mysql+aiomysql://aiscope:aiscope@mysql:3306/aiscope
       AISCOPE_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       AISCOPE_QWEN_API_KEY: ${QWEN_API_KEY}
+      AISCOPE_DOUBAO_API_KEY: ${DOUBAO_API_KEY}
+      AISCOPE_KIMI_API_KEY: ${KIMI_API_KEY}
+      AISCOPE_WENXIN_API_KEY: ${WENXIN_API_KEY}
+      AISCOPE_HUNYUAN_API_KEY: ${HUNYUAN_API_KEY}
+      # Optional: override LLM used for prompt generation and suggestions
+      AISCOPE_LLM_API_KEY: ${LLM_API_KEY:-}
+      AISCOPE_LLM_BASE_URL: ${LLM_BASE_URL:-}
+      AISCOPE_LLM_MODEL: ${LLM_MODEL:-}
+      # Auth
+      AISCOPE_SECRET_KEY: ${AISCOPE_SECRET_KEY:?AISCOPE_SECRET_KEY must be set}
     depends_on:
-      - postgres
+      - mysql
     volumes:
       - ./backend:/app
 
@@ -46,4 +58,4 @@ services:
       - backend
 
 volumes:
-  postgres-data:
+  mysql-data:

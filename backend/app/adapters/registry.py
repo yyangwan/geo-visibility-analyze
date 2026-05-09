@@ -2,11 +2,19 @@
 
 from app.adapters.base import PlatformAdapter
 from app.adapters.deepseek import DeepSeekAdapter
+from app.adapters.doubao import DoubaoAdapter
+from app.adapters.hunyuan import HunyuanAdapter
+from app.adapters.kimi import KimiAdapter
 from app.adapters.qwen import QwenAdapter
+from app.adapters.wenxin import WenxinAdapter
 
 _ADAPTERS: dict[str, type[PlatformAdapter]] = {
     "deepseek": DeepSeekAdapter,
     "qwen": QwenAdapter,
+    "doubao": DoubaoAdapter,
+    "kimi": KimiAdapter,
+    "wenxin": WenxinAdapter,
+    "hunyuan": HunyuanAdapter,
 }
 
 

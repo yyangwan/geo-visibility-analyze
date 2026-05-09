@@ -1,0 +1,64 @@
+:root {
+  --bg-base: #0f1117;
+  --bg-card: #1a1d29;
+  --bg-sidebar: #0d0f14;
+  --bg-hover: #252836;
+  --bg-input: #12141c;
+  --accent: #00d4aa;
+  --accent-dim: rgba(0, 212, 170, 0.12);
+  --accent-blue: #4cc9f0;
+  --status-good: #00d4aa;
+  --status-warn: #fbbf24;
+  --status-bad: #ef4444;
+  --text-primary: #e4e4e7;
+  --text-secondary: #71717a;
+  --text-muted: #52525b;
+  --border: #27272a;
+  --border-light: #1e1e24;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "Inter", "Noto Sans SC", -apple-system, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+html.dark {
+  --el-bg-color: var(--bg-card);
+  --el-bg-color-overlay: var(--bg-card);
+  --el-bg-color-page: var(--bg-base);
+  --el-border-color: var(--border);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+}
+
+/* Element Plus dark overrides */
+.el-card {
+  --el-card-bg-color: var(--bg-card);
+  border-color: var(--border-light);
+}
+
+.el-table {
+  --el-table-bg-color: var(--bg-card);
+  --el-table-tr-bg-color: var(--bg-card);
+  --el-table-header-bg-color: var(--bg-hover);
+  --el-table-border-color: var(--border-light);
+  --el-table-text-color: var(--text-primary);
+  --el-table-header-text-color: var(--text-secondary);
+}
+
+.el-table__body tr:hover > td {
+  background-color: var(--bg-hover) !important;
+}

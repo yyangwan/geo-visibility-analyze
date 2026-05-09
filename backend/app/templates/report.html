@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm;
+    @bottom-center { content: counter(page); font-size: 9px; color: #999; }
+  }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif;
+    color: #1a1a2e;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .cover {
+    text-align: center;
+    padding-top: 120px;
+    page-break-after: always;
+  }
+  .cover h1 {
+    font-size: 26px;
+    color: #0d9488;
+    margin-bottom: 8px;
+  }
+  .cover .subtitle {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 40px;
+  }
+  .cover .meta {
+    font-size: 12px;
+    color: #999;
+  }
+  h2 {
+    font-size: 16px;
+    color: #0d9488;
+    border-bottom: 2px solid #0d9488;
+    padding-bottom: 6px;
+    margin-top: 28px;
+    margin-bottom: 14px;
+  }
+  .score-grid {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .score-box {
+    flex: 1;
+    background: #f0fdfa;
+    border: 1px solid #ccfbf1;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .score-box .label {
+    font-size: 10px;
+    color: #666;
+    margin-bottom: 4px;
+  }
+  .score-box .value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #0d9488;
+  }
+  .score-box .value.warn { color: #f59e0b; }
+  .score-box .value.bad { color: #ef4444; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+    font-size: 11px;
+  }
+  th {
+    background: #f0fdfa;
+    color: #0d9488;
+    font-weight: 600;
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 2px solid #ccfbf1;
+  }
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  tr:nth-child(even) td { background: #fafafa; }
+  .insight-item {
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: #f8fafc;
+    border-left: 3px solid #0d9488;
+    border-radius: 0 4px 4px 0;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 600;
+  }
+  .badge-good { background: #dcfce7; color: #16a34a; }
+  .badge-warn { background: #fef3c7; color: #d97706; }
+  .badge-bad { background: #fee2e2; color: #dc2626; }
+  .footer {
+    margin-top: 40px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e7eb;
+    font-size: 9px;
+    color: #999;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- Cover Page -->
+<div class="cover">
+  <h1>AI搜索可见性分析报告</h1>
+  <div class="subtitle">{{ project_name }}</div>
+  <div class="meta">
+    报告生成时间：{{ report_date }}<br>
+    AI Scope - AI搜索可见性分析平台
+  </div>
+</div>
+
+<!-- Executive Summary -->
+<h2>一、执行摘要</h2>
+<div class="score-grid">
+  <div class="score-box">
+    <div class="label">综合评分</div>
+    <div class="value">{{ overall_score }}</div>
+  </div>
+  <div class="score-box">
+    <div class="label">品牌提及率</div>
+    <div class="value">{{ mention_rate }}</div>
+  </div>
+  <div class="score-box">
+    <div class="label">竞品排名</div>
+    <div class="value">{{ competitor_rank }}</div>
+  </div>
+</div>
+
+<!-- Platform Scores -->
+<h2>二、各平台表现</h2>
+<table>
+  <thead>
+    <tr>
+      <th>平台</th>
+      <th>评分</th>
+      <th>状态</th>
+      <th>提及情况</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in platform_data %}
+    <tr>
+      <td><strong>{{ p.name }}</strong></td>
+      <td>{{ p.score }}</td>
+      <td><span class="badge badge-{{ 'good' if p.score >= 70 else 'warn' if p.score >= 40 else 'bad' }}">{{ p.status }}</span></td>
+      <td>{{ p.mention_rate }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Brand Comparison -->
+<h2>三、品牌对比</h2>
+<table>
+  <thead>
+    <tr>
+      <th>品牌</th>
+      <th>提及次数</th>
+      <th>推荐次数</th>
+      <th>提及率</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in brand_comparison %}
+    <tr>
+      <td><strong>{{ b.name }}</strong></td>
+      <td>{{ b.mentions }}</td>
+      <td>{{ b.recommended }}</td>
+      <td>{{ b.rate }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Insights -->
+<h2>四、关键洞察</h2>
+{% for insight in insights %}
+<div class="insight-item">{{ insight }}</div>
+{% endfor %}
+
+<div class="footer">
+  本报告由 AI Scope 自动生成 · {{ report_date }}
+</div>
+
+</body>
+</html>
