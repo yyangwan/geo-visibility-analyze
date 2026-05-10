@@ -6,15 +6,22 @@ from app.adapters.doubao import DoubaoAdapter
 from app.adapters.hunyuan import HunyuanAdapter
 from app.adapters.kimi import KimiAdapter
 from app.adapters.qwen import QwenAdapter
-from app.adapters.wenxin import WenxinAdapter
 
 _ADAPTERS: dict[str, type[PlatformAdapter]] = {
     "deepseek": DeepSeekAdapter,
     "qwen": QwenAdapter,
     "doubao": DoubaoAdapter,
     "kimi": KimiAdapter,
-    "wenxin": WenxinAdapter,
     "hunyuan": HunyuanAdapter,
+}
+
+# Chinese labels for each platform (used by /api/platforms)
+PLATFORM_LABELS: dict[str, str] = {
+    "deepseek": "DeepSeek",
+    "qwen": "通义千问",
+    "doubao": "豆包",
+    "kimi": "Kimi",
+    "hunyuan": "腾讯元宝",
 }
 
 

@@ -9,9 +9,9 @@ from app.config import settings
 
 class KimiAdapter(OpenAICompatAdapter):
     platform_name = "kimi"
-    base_url = "https://api.moonshot.cn/v1"
-    model = "moonshot-v1-8k"
 
     def __init__(self):
         self.api_key = settings.kimi_api_key
+        self.base_url = settings.kimi_base_url
+        self.model = settings.kimi_model
         super().__init__()

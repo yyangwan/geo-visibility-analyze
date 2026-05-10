@@ -192,6 +192,16 @@ export function createAuditEventSource(auditId: number): EventSource {
   return new EventSource(url)
 }
 
+// Platforms
+export interface PlatformInfo {
+  key: string
+  label: string
+  configured: boolean
+}
+
+export const getPlatforms = () =>
+  api.get<PlatformInfo[]>('/platforms')
+
 // Auth
 export interface AuthUser {
   id: number

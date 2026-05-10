@@ -9,9 +9,9 @@ from app.config import settings
 
 class HunyuanAdapter(OpenAICompatAdapter):
     platform_name = "hunyuan"
-    base_url = "https://api.hunyuan.cloud.tencent.com/v1"
-    model = "hunyuan-lite"
 
     def __init__(self):
         self.api_key = settings.hunyuan_api_key
+        self.base_url = settings.hunyuan_base_url
+        self.model = settings.hunyuan_model
         super().__init__()

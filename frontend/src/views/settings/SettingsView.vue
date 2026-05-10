@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useProjectStore } from '../../stores/project'
-import { PLATFORM_LABELS } from '../../constants/platforms'
-import { createProject, addBrand } from '../../api/client'
+import { createProject, addBrand, getPlatforms } from '../../api/client'
+import type { PlatformInfo } from '../../api/client'
 
 const store = useProjectStore()
 const newProjectName = ref('')
@@ -10,6 +10,7 @@ const newProjectIndustry = ref('insurance')
 const newBrandName = ref('')
 const newBrandAliases = ref('')
 const newBrandIsCompetitor = ref(false)
+const platforms = ref<PlatformInfo[]>([])
 
 const selectedProjectId = computed({
   get: () => store.currentProject?.id,
@@ -43,8 +44,18 @@ async function handleAddBrand() {
   await store.fetchBrands(store.currentProject.id)
 }
 
+async function fetchPlatforms() {
+  try {
+    const { data } = await getPlatforms()
+    platforms.value = data
+  } catch {
+    platforms.value = []
+  }
+}
+
 onMounted(() => {
   if (!store.projects.length) store.fetchProjects()
+  fetchPlatforms()
 })
 </script>
 
@@ -52,108 +63,232 @@ onMounted(() => {
   <div>
     <div class="header">
       <h1>平台配置</h1>
+      <p class="header-desc">管理项目、品牌和查看平台连接状态</p>
     </div>
 
     <!-- Project Management -->
-    <div class="section">
-      <h2>项目管理</h2>
-      <div class="form-row">
-        <el-select v-model="selectedProjectId" placeholder="选择项目" style="width: 200px">
-          <el-option
-            v-for="p in store.projects"
-            :key="p.id"
-            :label="p.name"
-            :value="p.id"
-          />
-        </el-select>
-        <el-input v-model="newProjectName" placeholder="新项目名称" style="width: 200px" />
-        <el-input v-model="newProjectIndustry" placeholder="行业" style="width: 120px" />
-        <el-button type="primary" @click="handleCreateProject">创建项目</el-button>
+    <div class="card">
+      <div class="card-title">项目管理</div>
+      <div class="card-body">
+        <div class="field-group" style="width: 200px">
+          <label class="field-label">当前项目</label>
+          <select v-model="selectedProjectId" class="input select-input">
+            <option :value="undefined" disabled>选择项目</option>
+            <option v-for="p in store.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+        </div>
+        <div class="form-row" style="margin-top: 8px">
+          <div class="field-group" style="width: 200px">
+            <label class="field-label">项目名称</label>
+            <input
+              v-model="newProjectName"
+              class="input"
+              placeholder="输入新项目名称"
+              @keyup.enter="handleCreateProject"
+            />
+          </div>
+          <div class="field-group" style="width: 140px">
+            <label class="field-label">行业</label>
+            <select v-model="newProjectIndustry" class="input select-input">
+              <option value="insurance">保险</option>
+              <option value="finance">金融</option>
+              <option value="realestate">房地产</option>
+              <option value="education">教育</option>
+              <option value="healthcare">医疗健康</option>
+              <option value="ecommerce">电商</option>
+              <option value="automotive">汽车</option>
+              <option value="travel">旅游</option>
+              <option value="food">餐饮</option>
+              <option value="technology">科技</option>
+            </select>
+          </div>
+          <button class="btn btn-primary self-end" :disabled="!newProjectName.trim()" @click="handleCreateProject">
+            创建项目
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- Brand Management -->
-    <div class="section">
-      <h2>品牌管理</h2>
-      <div class="form-row">
-        <el-input v-model="newBrandName" placeholder="品牌名称" style="width: 160px" />
-        <el-input v-model="newBrandAliases" placeholder="别名 (逗号分隔)" style="width: 200px" />
-        <el-checkbox v-model="newBrandIsCompetitor">竞品</el-checkbox>
-        <el-button type="primary" @click="handleAddBrand">添加品牌</el-button>
-      </div>
-      <div class="brand-list">
-        <div v-for="brand in store.brands" :key="brand.id" class="brand-item">
-          <span :class="{ competitor: brand.is_competitor }">{{ brand.name }}</span>
-          <span v-if="brand.aliases?.length" class="aliases">({{ brand.aliases.join(', ') }})</span>
-          <span class="tag" :class="brand.is_competitor ? 'tag-warn' : 'tag-good'">
-            {{ brand.is_competitor ? '竞品' : '主品牌' }}
-          </span>
+    <div class="card">
+      <div class="card-title">品牌管理</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="field-group" style="width: 180px">
+            <label class="field-label">品牌名称</label>
+            <input
+              v-model="newBrandName"
+              class="input"
+              placeholder="品牌名称"
+              @keyup.enter="handleAddBrand"
+            />
+          </div>
+          <div class="field-group" style="width: 200px">
+            <label class="field-label">别名（逗号分隔）</label>
+            <input v-model="newBrandAliases" class="input" placeholder="别名 (可选)" />
+          </div>
+          <label class="checkbox-label self-end">
+            <input type="checkbox" v-model="newBrandIsCompetitor" class="checkbox" />
+            <span>竞品</span>
+          </label>
+          <button
+            class="btn btn-primary self-end"
+            :disabled="!newBrandName.trim() || !store.currentProject"
+            @click="handleAddBrand"
+          >
+            添加品牌
+          </button>
         </div>
-        <div v-if="!store.brands.length" class="empty">暂无品牌</div>
+
+        <div v-if="store.brands.length" class="brand-list">
+          <div v-for="brand in store.brands" :key="brand.id" class="brand-item">
+            <span class="brand-name" :class="{ competitor: brand.is_competitor }">{{ brand.name }}</span>
+            <span v-if="brand.aliases?.length" class="brand-aliases">({{ brand.aliases.join(', ') }})</span>
+            <span class="tag" :class="brand.is_competitor ? 'tag-warn' : 'tag-good'">
+              {{ brand.is_competitor ? '竞品' : '主品牌' }}
+            </span>
+          </div>
+        </div>
+        <div v-else class="empty">当前项目暂无品牌，请先添加</div>
       </div>
     </div>
 
     <!-- Platform Status -->
-    <div class="section">
-      <h2>平台状态</h2>
-      <div class="platform-list">
-        <div v-for="(label, key) in PLATFORM_LABELS" :key="key" class="platform-status">
-          <span class="platform-name">{{ label }}</span>
-          <span class="status-dot pending"></span>
-          <span class="status-text">未配置</span>
+    <div class="card">
+      <div class="card-title">平台状态</div>
+      <div class="card-body">
+        <div v-if="platforms.length" class="platform-grid">
+          <div v-for="p in platforms" :key="p.key" class="platform-card" :class="{ configured: p.configured }">
+            <span class="dot" :class="p.configured ? 'dot-ok' : 'dot-muted'"></span>
+            <div class="platform-info">
+              <div class="platform-label">{{ p.label }}</div>
+              <div class="platform-status-text" :class="p.configured ? 'text-ok' : 'text-muted'">
+                {{ p.configured ? '已配置' : '未配置' }}
+              </div>
+            </div>
+          </div>
         </div>
+        <div v-else class="empty">加载中...</div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.header { margin-bottom: 24px; }
-.header h1 { font-size: 18px; font-weight: 600; }
+.header {
+  margin-bottom: var(--space-6);
+}
+.header h1 {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+.header-desc {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: var(--space-1);
+}
 
-.section {
+/* Card */
+.card {
   background: var(--bg-card);
   border-radius: var(--radius-md);
-  padding: 20px;
   border: 1px solid var(--border-light);
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
-
-.section h2 {
-  font-size: 14px;
+.card-title {
+  font-size: var(--text-sm);
   font-weight: 600;
-  margin-bottom: 14px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.card-body {
+  padding: var(--space-3);
 }
 
+/* Form */
 .form-row {
   display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 14px;
+  gap: var(--space-2);
+  align-items: flex-end;
   flex-wrap: wrap;
 }
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.field-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.flex-1 { flex: 1; min-width: 100px; }
+.self-end { align-self: flex-end; }
 
-.brand-list {
-  margin-top: 8px;
+.input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--duration-fast);
+  height: 30px;
+}
+.input:focus {
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: var(--text-muted);
+}
+.select-input {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+/* Brand list */
+.brand-list {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+  padding-top: var(--space-2);
+}
 .brand-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
+  gap: 6px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border-light);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
-
 .brand-item:last-child { border-bottom: none; }
+.brand-item:hover { background: var(--bg-hover); margin: 0 -4px; padding: 5px 4px; border-radius: var(--radius-sm); }
 
-.competitor { color: var(--text-secondary); }
-
-.aliases {
-  color: var(--text-muted);
-  font-size: 11px;
-}
+.brand-name { color: var(--text-primary); }
+.brand-name.competitor { color: var(--text-secondary); }
+.brand-aliases { color: var(--text-muted); font-size: var(--text-xs); }
 
 .tag {
   font-size: 9px;
@@ -162,43 +297,48 @@ onMounted(() => {
   font-weight: 600;
   margin-left: auto;
 }
-
 .tag-good { background: rgba(0, 212, 170, 0.12); color: var(--status-good); }
 .tag-warn { background: rgba(251, 191, 36, 0.12); color: var(--status-warn); }
 
 .empty {
   text-align: center;
-  padding: 20px;
+  padding: var(--space-6) var(--space-4);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
-.platform-list {
+/* Platform grid */
+.platform-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-2);
 }
-
-.platform-status {
+.platform-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--space-2);
+  padding: 8px 10px;
   background: var(--bg-hover);
   border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: border-color var(--duration-fast);
+}
+.platform-card.configured {
+  border-color: rgba(0, 212, 170, 0.15);
 }
 
-.platform-name {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-dot {
+.dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
+.dot-ok { background: var(--status-good); box-shadow: 0 0 6px rgba(0, 212, 170, 0.4); }
+.dot-muted { background: var(--text-muted); }
 
-.status-dot.pending { background: var(--text-muted); }
-.status-text { font-size: 10px; color: var(--text-muted); }
+.platform-info { display: flex; flex-direction: column; gap: 2px; }
+.platform-label { font-size: var(--text-sm); font-weight: 500; color: var(--text-primary); }
+.platform-status-text { font-size: var(--text-xs); }
+.platform-status-text.text-ok { color: var(--status-good); }
+.platform-status-text.text-muted { color: var(--text-muted); }
 </style>

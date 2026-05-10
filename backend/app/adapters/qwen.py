@@ -9,9 +9,9 @@ from app.config import settings
 
 class QwenAdapter(OpenAICompatAdapter):
     platform_name = "qwen"
-    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model = "qwen-plus"
 
     def __init__(self):
         self.api_key = settings.qwen_api_key
+        self.base_url = settings.qwen_base_url
+        self.model = settings.qwen_model
         super().__init__()

@@ -1,6 +1,6 @@
 """Shared base for OpenAI-compatible platform adapters.
 
-All domestic AI platforms (DeepSeek, Qwen, Doubao, Kimi, Wenxin, Hunyuan)
+All domestic AI platforms (DeepSeek, Qwen, Doubao, Kimi, Hunyuan)
 support the OpenAI chat completions protocol, so we extract common logic here.
 """
 

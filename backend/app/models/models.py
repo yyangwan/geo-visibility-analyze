@@ -89,7 +89,8 @@ class Prompt(Base):
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"))
     text: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[PromptCategory] = mapped_column(
-        Enum(PromptCategory), default=PromptCategory.RECOMMEND
+        Enum(PromptCategory, values_callable=lambda obj: [e.value for e in obj]),
+        default=PromptCategory.RECOMMEND,
     )
     is_auto_generated: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -105,7 +106,8 @@ class Audit(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"))
     status: Mapped[QueryStatus] = mapped_column(
-        Enum(QueryStatus), default=QueryStatus.PENDING
+        Enum(QueryStatus, values_callable=lambda obj: [e.value for e in obj]),
+        default=QueryStatus.PENDING,
     )
     platforms_json: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

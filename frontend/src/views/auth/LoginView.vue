@@ -48,8 +48,8 @@ async function handleSubmit() {
       <div class="narrative-content">
         <h1>您的品牌在 AI 搜索中被推荐了吗？</h1>
         <p class="narrative-desc">
-          AI Scope 实时监测 DeepSeek、通义千问、豆包、Kimi、文心一言、腾讯元宝
-          六大 AI 平台，量化品牌可见性评分、提及率与竞品排名。
+          智见实时监测 DeepSeek、通义千问、豆包、Kimi、腾讯元宝
+          五大 AI 平台，量化品牌可见性评分、提及率与竞品排名。
         </p>
         <div class="sample-cards">
           <div class="sample-card">
@@ -85,7 +85,7 @@ async function handleSubmit() {
       <div class="login-header">
         <div class="logo">
           <span class="dot"></span>
-          AI<span class="accent">Scope</span>
+          智<span class="accent">见</span>
         </div>
         <p class="subtitle">AI搜索可见性分析平台</p>
       </div>

@@ -10,9 +10,9 @@ from app.config import settings
 
 class DoubaoAdapter(OpenAICompatAdapter):
     platform_name = "doubao"
-    base_url = "https://ark.cn-beijing.volces.com/api/v3"
-    model = "doubao-pro-32k"
 
     def __init__(self):
         self.api_key = settings.doubao_api_key
+        self.base_url = settings.doubao_base_url
+        self.model = settings.doubao_model
         super().__init__()

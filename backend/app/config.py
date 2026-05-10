@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     # Doubao (Volcengine/ByteDance) API
     doubao_api_key: str = ""
     doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    doubao_model: str = "doubao-pro-32k"
+    doubao_model: str = "doubao-1-5-pro-32k-250115"
 
     # Kimi (Moonshot) API
     kimi_api_key: str = ""
@@ -56,7 +57,10 @@ class Settings(BaseSettings):
     # Timezone for scheduler (default: China Standard Time)
     tz: str = "Asia/Shanghai"
 
-    model_config = {"env_file": ".env", "env_prefix": "AISCOPE_"}
+    model_config = {
+        "env_file": str(Path(__file__).resolve().parents[2] / ".env"),
+        "env_prefix": "AISCOPE_",
+    }
 
     @field_validator("secret_key")
     @classmethod

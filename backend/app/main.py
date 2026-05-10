@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.audits import router as audits_router
 from app.api.auth import router as auth_router
+from app.api.platforms import router as platforms_router
 from app.api.projects import router as projects_router
 from app.api.reports import router as reports_router
 from app.api.schedules import router as schedules_router
@@ -33,7 +34,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Scope",
+    title="智见",
     description="AI搜索可见性分析平台",
     version="0.1.0",
     lifespan=lifespan,
@@ -50,6 +51,7 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
+app.include_router(platforms_router, prefix="/api/platforms", tags=["platforms"])
 app.include_router(audits_router, prefix="/api/audits", tags=["audits"])
 app.include_router(schedules_router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(trends_router, prefix="/api/trends", tags=["trends"])

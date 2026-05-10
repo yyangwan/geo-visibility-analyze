@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { PLATFORM_LABELS, PLATFORM_KEYS } from './platforms'
 
 describe('Platform constants', () => {
-  it('has 6 platforms', () => {
-    expect(PLATFORM_KEYS).toHaveLength(6)
+  it('has 5 platforms', () => {
+    expect(PLATFORM_KEYS).toHaveLength(5)
   })
 
   it('includes all required platforms', () => {
-    const required = ['deepseek', 'qwen', 'doubao', 'kimi', 'wenxin', 'hunyuan']
+    const required = ['deepseek', 'qwen', 'doubao', 'kimi', 'hunyuan']
     required.forEach(p => {
       expect(PLATFORM_LABELS[p]).toBeDefined()
     })
@@ -18,7 +18,6 @@ describe('Platform constants', () => {
     expect(PLATFORM_LABELS.qwen).toBe('通义千问')
     expect(PLATFORM_LABELS.doubao).toBe('豆包')
     expect(PLATFORM_LABELS.kimi).toBe('Kimi')
-    expect(PLATFORM_LABELS.wenxin).toBe('文心一言')
     expect(PLATFORM_LABELS.hunyuan).toBe('腾讯元宝')
   })
 

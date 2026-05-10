@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.adapters.registry import available_platforms
 from app.models.models import PromptCategory, QueryStatus
 
 
@@ -69,9 +70,12 @@ class PromptOut(BaseModel):
 
 
 # --- Audits ---
+_ALL_PLATFORMS = available_platforms()
+
+
 class AuditCreate(BaseModel):
     project_id: int
-    platforms: list[str] = ["deepseek", "qwen", "doubao", "kimi", "wenxin", "hunyuan"]
+    platforms: list[str] = _ALL_PLATFORMS
 
 
 class AuditOut(BaseModel):
@@ -123,7 +127,7 @@ class ReportOut(BaseModel):
 class ScheduledJobCreate(BaseModel):
     project_id: int
     cron_expression: str  # e.g. "0 22 * * *" = every day at 22:00
-    platforms: list[str] = ["deepseek", "qwen", "doubao", "kimi", "wenxin", "hunyuan"]
+    platforms: list[str] = _ALL_PLATFORMS
 
 
 class ScheduledJobOut(BaseModel):

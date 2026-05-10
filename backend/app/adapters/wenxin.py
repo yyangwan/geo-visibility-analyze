@@ -9,9 +9,9 @@ from app.config import settings
 
 class WenxinAdapter(OpenAICompatAdapter):
     platform_name = "wenxin"
-    base_url = "https://qianfan.baidubce.com/v2"
-    model = "ernie-4.0-8k"
 
     def __init__(self):
         self.api_key = settings.wenxin_api_key
+        self.base_url = settings.wenxin_base_url
+        self.model = settings.wenxin_model
         super().__init__()
