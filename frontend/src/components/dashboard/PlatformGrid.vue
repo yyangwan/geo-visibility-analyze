@@ -1,16 +1,11 @@
 <script setup lang="ts">
+import { PLATFORM_LABELS } from '../../constants/platforms'
+
 const props = defineProps<{
   platformScores: Record<string, number>
 }>()
 
-const platformNames: Record<string, string> = {
-  deepseek: 'DeepSeek',
-  qwen: '通义千问',
-  doubao: '豆包 (字节)',
-  kimi: 'Kimi',
-  wenxin: '文心一言',
-  hunyuan: '腾讯元宝',
-}
+const platformNames = PLATFORM_LABELS
 
 function getStatus(score: number): 'good' | 'warn' | 'bad' {
   if (score >= 70) return 'good'

@@ -43,6 +43,44 @@ async function handleSubmit() {
 
 <template>
   <div class="login-page">
+    <!-- Product Narrative -->
+    <div class="narrative">
+      <div class="narrative-content">
+        <h1>您的品牌在 AI 搜索中被推荐了吗？</h1>
+        <p class="narrative-desc">
+          AI Scope 实时监测 DeepSeek、通义千问、豆包、Kimi、文心一言、腾讯元宝
+          六大 AI 平台，量化品牌可见性评分、提及率与竞品排名。
+        </p>
+        <div class="sample-cards">
+          <div class="sample-card">
+            <div class="sample-score">
+              <span class="score-value">78</span>
+              <span class="score-suffix">/100</span>
+            </div>
+            <div class="sample-label">综合可见性</div>
+          </div>
+          <div class="sample-card">
+            <div class="sample-score">
+              <span class="score-value">63%</span>
+            </div>
+            <div class="sample-label">品牌提及率</div>
+          </div>
+          <div class="sample-card">
+            <div class="sample-score">
+              <span class="score-value">#2</span>
+            </div>
+            <div class="sample-label">竞品排名</div>
+          </div>
+        </div>
+        <ul class="feature-list">
+          <li>6 大 AI 平台实时审计</li>
+          <li>竞品对比与趋势追踪</li>
+          <li>AI 驱动的优化建议</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Auth Form -->
     <div class="login-card">
       <div class="login-header">
         <div class="logo">
@@ -93,17 +131,107 @@ async function handleSubmit() {
 .login-page {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
   background: var(--bg-base);
 }
 
+/* Narrative Panel */
+.narrative {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 64px;
+  background: linear-gradient(135deg, #0d1117 0%, #111827 50%, #0f172a 100%);
+  border-right: 1px solid var(--border);
+}
+
+.narrative-content {
+  max-width: 480px;
+}
+
+.narrative h1 {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.narrative-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 32px;
+}
+
+.sample-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.sample-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 14px;
+  text-align: center;
+}
+
+.score-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.score-suffix {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.sample-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.feature-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feature-list li {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding-left: 20px;
+  position: relative;
+}
+
+.feature-list li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .login-card {
-  width: 380px;
+  width: 100%;
+  max-width: 400px;
   background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
-  padding: 36px 32px;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  padding: 48px 36px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .login-header {
@@ -204,5 +332,28 @@ async function handleSubmit() {
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .login-page {
+    flex-direction: column;
+  }
+  .narrative {
+    padding: 32px 24px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .narrative h1 {
+    font-size: 22px;
+  }
+  .sample-cards {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .login-card {
+    max-width: none;
+    border-left: none;
+    padding: 32px 24px;
+  }
 }
 </style>

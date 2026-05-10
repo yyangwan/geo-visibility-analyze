@@ -18,18 +18,20 @@ interface NavItem {
 const navItems: { section: string; items: (NavItem & { badge?: number })[] }[] = [
   { section: '分析', items: [
     { path: '/dashboard', icon: '📊', label: '可见性概览' },
-    { path: '/trends', icon: '📈', label: '趋势追踪', badge: 3 },
+    { path: '/trends', icon: '📈', label: '趋势追踪' },
     { path: '/competitors', icon: '⚔️', label: '竞品对比' },
     { path: '/prompts', icon: '🔍', label: 'Prompt管理' },
   ]},
   { section: '优化', items: [
     { path: '/suggestions', icon: '💡', label: '优化建议' },
-    { path: '/settings', icon: '📄', label: '报告导出' },
   ]},
   { section: '设置', items: [
     { path: '/settings', icon: '⚙️', label: '平台配置' },
   ]},
 ]
+
+// Flatten all items for mobile bottom bar
+const allNavItems = navItems.flatMap(g => g.items)
 
 function handleLogout() {
   auth.logout()
@@ -44,14 +46,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <nav class="sidebar" :class="{ collapsed }">
-    <div class="sidebar-logo" @click="collapsed = !collapsed">
+  <a href="#main-content" class="skip-to-content">跳转到主要内容</a>
+
+  <nav class="sidebar" :class="{ collapsed }" aria-label="主导航">
+    <div class="sidebar-logo" @click="collapsed = !collapsed" role="button" tabindex="0" aria-label="收起/展开侧边栏">
       <div class="dot"></div>
       <template v-if="!collapsed">AI<span>Scope</span></template>
     </div>
 
     <template v-for="group in navItems" :key="group.section">
-      <div v-if="!collapsed" class="nav-section">{{ group.section }}</div>
+      <div v-if="!collapsed" class="nav-section" role="heading" :aria-level="2">{{ group.section }}</div>
       <RouterLink
         v-for="item in group.items"
         :key="item.label"
@@ -61,10 +65,12 @@ onMounted(() => {
           active: route.path === item.path,
           disabled: item.disabled,
         }"
+        :aria-current="route.path === item.path ? 'page' : undefined"
+        :aria-disabled="item.disabled || undefined"
       >
-        <span class="nav-icon">{{ item.icon }}</span>
+        <span class="nav-icon" aria-hidden="true">{{ item.icon }}</span>
         <span v-if="!collapsed">{{ item.label }}</span>
-        <span v-if="!collapsed && item.badge" class="nav-badge">{{ item.badge }}</span>
+        <span v-if="!collapsed && item.badge" class="nav-badge" :aria-label="`${item.badge} 个待查看`">{{ item.badge }}</span>
       </RouterLink>
     </template>
 
@@ -74,13 +80,29 @@ onMounted(() => {
       <div class="user-info">
         <span class="user-name">{{ auth.user.username }}</span>
       </div>
-      <button class="btn-logout" @click="handleLogout">退出</button>
+      <button class="btn-logout" @click="handleLogout" aria-label="退出登录">退出</button>
     </div>
   </nav>
 
-  <main class="main-content">
+  <main id="main-content" class="main-content" role="main">
     <slot />
   </main>
+
+  <!-- Mobile bottom tab bar -->
+  <nav class="bottom-bar" aria-label="移动端导航">
+    <RouterLink
+      v-for="item in allNavItems"
+      :key="item.path"
+      :to="item.disabled ? '' : item.path"
+      class="bottom-tab"
+      :class="{ active: route.path === item.path }"
+      :aria-current="route.path === item.path ? 'page' : undefined"
+      :aria-label="item.label"
+    >
+      <span class="bottom-icon" aria-hidden="true">{{ item.icon }}</span>
+      <span class="bottom-label">{{ item.label }}</span>
+    </RouterLink>
+  </nav>
 </template>
 
 <style scoped>
@@ -92,7 +114,7 @@ onMounted(() => {
   flex-direction: column;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  transition: width 0.2s ease;
+  transition: width var(--duration-normal) var(--ease-default);
 }
 
 .sidebar.collapsed {
@@ -141,7 +163,7 @@ onMounted(() => {
   border-left: 2px solid transparent;
   color: var(--text-secondary);
   text-decoration: none;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) var(--ease-default);
 }
 
 .nav-item:hover:not(.disabled) {
@@ -215,7 +237,7 @@ onMounted(() => {
   color: var(--text-muted);
   border: 1px solid var(--border);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--duration-fast);
   flex-shrink: 0;
 }
 
@@ -228,5 +250,64 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 24px 28px;
+}
+
+/* Mobile bottom bar - hidden on desktop */
+.bottom-bar {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    display: none;
+  }
+
+  .main-content {
+    padding: 16px 12px 72px;
+  }
+
+  .bottom-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: var(--bg-sidebar);
+    border-top: 1px solid var(--border);
+    z-index: 100;
+    justify-content: space-around;
+    align-items: center;
+    padding: 0 4px;
+  }
+
+  .bottom-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 6px;
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 9px;
+    flex: 1;
+    min-width: 0;
+    transition: color var(--duration-fast);
+  }
+
+  .bottom-tab.active {
+    color: var(--accent);
+  }
+
+  .bottom-icon {
+    font-size: 16px;
+  }
+
+  .bottom-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 </style>

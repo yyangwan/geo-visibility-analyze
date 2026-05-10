@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
 import {
   getSuggestions,
@@ -8,6 +9,8 @@ import {
   deleteSuggestion,
   type Suggestion,
 } from '../../api/client'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 
 const store = useProjectStore()
 const suggestions = ref<Suggestion[]>([])
@@ -80,7 +83,7 @@ async function handleGenerate() {
     const { data } = await generateSuggestions(store.currentProject.id)
     suggestions.value = [...data, ...suggestions.value]
   } catch (e: any) {
-    alert(e?.response?.data?.detail || '生成失败，请确保已有审计报告')
+    ElMessage.error(e?.response?.data?.detail || '生成失败，请确保已有审计报告')
   } finally {
     generating.value = false
   }
@@ -90,14 +93,19 @@ async function handleResolve(s: Suggestion) {
   try {
     await resolveSuggestion(s.id)
     s.is_resolved = true
-  } catch { /* ignore */ }
+    ElMessage.success('已标记为完成')
+  } catch {
+    ElMessage.error('操作失败')
+  }
 }
 
 async function handleDelete(id: number) {
   try {
     await deleteSuggestion(id)
     suggestions.value = suggestions.value.filter(s => s.id !== id)
-  } catch { /* ignore */ }
+  } catch {
+    ElMessage.error('删除失败')
+  }
 }
 
 onMounted(async () => {
@@ -144,7 +152,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="loading" class="loading-state">加载中...</div>
+    <LoadingSkeleton v-if="loading" variant="list" :count="6" />
 
     <template v-else-if="suggestions.length > 0">
       <!-- Grouped suggestions -->
@@ -182,11 +190,12 @@ onMounted(async () => {
     </template>
 
     <!-- Empty -->
-    <div v-else class="empty">
-      <div class="empty-icon">💡</div>
-      <h3>暂无优化建议</h3>
-      <p>完成首次审计后，点击"AI生成建议"获取个性化优化方案</p>
-    </div>
+    <EmptyState
+      v-else
+      icon="💡"
+      title="暂无优化建议"
+      description="完成首次审计后，点击「AI生成建议」获取个性化优化方案"
+    />
   </div>
 </template>
 
@@ -246,19 +255,6 @@ onMounted(async () => {
 }
 
 .tab.active { background: var(--accent-dim); color: var(--accent); }
-
-.btn {
-  padding: 7px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-  border: none;
-  font-weight: 500;
-  transition: all 0.15s;
-}
-
-.btn-primary { background: var(--accent); color: var(--bg-base); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Category Section */
 .category-section { margin-bottom: 20px; }
@@ -372,13 +368,6 @@ onMounted(async () => {
   color: var(--status-good);
   font-weight: 500;
 }
-
-.loading-state { text-align: center; padding: 60px; color: var(--text-muted); font-size: 13px; }
-
-.empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
-.empty-icon { font-size: 48px; margin-bottom: 16px; }
-.empty h3 { font-size: 16px; color: var(--text-primary); margin-bottom: 8px; }
-.empty p { font-size: 13px; }
 
 @media (max-width: 768px) {
   .header { flex-direction: column; }

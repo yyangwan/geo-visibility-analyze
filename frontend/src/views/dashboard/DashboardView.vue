@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
 import {
   createAudit,
@@ -11,6 +12,10 @@ import {
   getSchedules,
 } from '../../api/client'
 import type { TrendPoint } from '../../api/client'
+import { PLATFORM_LABELS } from '../../constants/platforms'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import ErrorState from '../../components/common/ErrorState.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 import ScoreCard from '../../components/dashboard/ScoreCard.vue'
 import PlatformGrid from '../../components/dashboard/PlatformGrid.vue'
 import CompetitorTable from '../../components/dashboard/CompetitorTable.vue'
@@ -21,6 +26,8 @@ const router = useRouter()
 const store = useProjectStore()
 const creating = ref(false)
 const exporting = ref(false)
+const loading = ref(true)
+const error = ref('')
 const previousScore = ref<number | null>(null)
 const previousMention = ref<number | null>(null)
 const nextScheduleTime = ref<string | null>(null)
@@ -82,12 +89,8 @@ const ctaInfo = computed(() => {
   const entries = Object.entries(ps)
   if (entries.length === 0) return null
   const worst = entries.reduce((a, b) => a[1] < b[1] ? a : b)
-  const platformLabels: Record<string, string> = {
-    deepseek: 'DeepSeek', qwen: '通义千问', doubao: '豆包',
-    kimi: 'Kimi', wenxin: '文心一言', hunyuan: '腾讯元宝',
-  }
   return {
-    platform: platformLabels[worst[0]] || worst[0],
+    platform: PLATFORM_LABELS[worst[0]] || worst[0],
     score: worst[1],
   }
 })
@@ -103,7 +106,9 @@ async function handleExportPdf() {
     a.download = `report-${report.value.id}.pdf`
     a.click()
     window.URL.revokeObjectURL(url)
-  } catch { /* ignore */ } finally {
+  } catch {
+    ElMessage.error('PDF 导出失败')
+  } finally {
     exporting.value = false
   }
 }
@@ -136,7 +141,7 @@ async function loadPreviousData() {
       previousScore.value = prev.overall_score
       previousMention.value = prev.mention_rate
     }
-  } catch { /* ignore */ }
+  } catch { /* non-critical */ }
 }
 
 async function loadScheduleInfo() {
@@ -144,113 +149,149 @@ async function loadScheduleInfo() {
     const { data } = await getSchedules()
     const active = data.filter((s: any) => s.is_active)
     if (active.length > 0) {
-      // Parse cron to display a friendly time
       const cron = active[0].cron_expression
       const parts = cron.split(' ')
       if (parts.length >= 2) {
         nextScheduleTime.value = `每天 ${parts[1].padStart(2, '0')}:${parts[0].padStart(2, '0')}`
       }
     }
-  } catch { /* ignore */ }
+  } catch { /* non-critical */ }
 }
 
 onMounted(async () => {
-  await store.fetchProjects()
-  if (store.currentProject) {
-    try {
-      const { data } = await getLatestReport(store.currentProject.id)
-      store.report = data
-    } catch { /* no report yet */ }
-    loadPreviousData()
-    loadScheduleInfo()
+  loading.value = true
+  error.value = ''
+  try {
+    await store.fetchProjects()
+    if (store.currentProject) {
+      try {
+        const { data } = await getLatestReport(store.currentProject.id)
+        store.report = data
+      } catch { /* no report yet */ }
+      loadPreviousData()
+      loadScheduleInfo()
+    }
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || '加载数据失败'
+  } finally {
+    loading.value = false
   }
 })
+
+async function retryLoad() {
+  loading.value = true
+  error.value = ''
+  try {
+    await store.fetchProjects()
+    if (store.currentProject) {
+      const { data } = await getLatestReport(store.currentProject.id)
+      store.report = data
+      loadPreviousData()
+      loadScheduleInfo()
+    }
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || '加载数据失败'
+  } finally {
+    loading.value = false
+  }
+}
 </script>
 
 <template>
   <div class="dashboard">
-    <!-- Header -->
-    <div class="header">
-      <div>
-        <h1>{{ store.currentProject?.name || 'AI Scope' }} · AI搜索可见性报告</h1>
-        <div class="header-meta">
-          <span v-if="hasData" class="freshness">
-            <span class="dot-green"></span>
-            基于 {{ store.prompts.length }} 条 Prompt · {{ store.report?.platform_scores ? Object.keys(store.report.platform_scores).length : 0 }} 个平台
-          </span>
-          <span v-else class="text-muted">暂无数据，请新建审计</span>
-          <template v-if="hasData">
-            <span class="meta-divider">|</span>
-            <span v-if="nextScheduleTime" class="schedule-hint">下次自动审计：{{ nextScheduleTime }}</span>
-          </template>
+    <!-- Loading -->
+    <LoadingSkeleton v-if="loading" variant="card" :count="4" />
+
+    <!-- Error -->
+    <ErrorState v-else-if="error" :message="error" @retry="retryLoad" />
+
+    <template v-else>
+      <!-- Header -->
+      <div class="header">
+        <div>
+          <h1>{{ store.currentProject?.name || 'AI Scope' }} · AI搜索可见性报告</h1>
+          <div class="header-meta">
+            <span v-if="hasData" class="freshness">
+              <span class="dot-green"></span>
+              基于 {{ store.prompts.length }} 条 Prompt · {{ store.report?.platform_scores ? Object.keys(store.report.platform_scores).length : 0 }} 个平台
+            </span>
+            <span v-else class="text-muted">暂无数据，请新建审计</span>
+            <template v-if="hasData">
+              <span class="meta-divider">|</span>
+              <span v-if="nextScheduleTime" class="schedule-hint">下次自动审计：{{ nextScheduleTime }}</span>
+            </template>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-ghost" :disabled="!hasData || exporting" @click="handleExportPdf">
+            {{ exporting ? '导出中...' : '导出PDF' }}
+          </button>
+          <button class="btn btn-ghost" @click="router.push('/settings')">
+            定时任务
+          </button>
+          <button
+            class="btn btn-primary"
+            :disabled="creating || !store.currentProject"
+            @click="handleNewAudit"
+          >
+            {{ creating ? '审计中...' : '+ 新建审计' }}
+          </button>
         </div>
       </div>
-      <div class="header-actions">
-        <button class="btn btn-ghost" :disabled="!hasData || exporting" @click="handleExportPdf">
-          {{ exporting ? '导出中...' : '导出PDF' }}
-        </button>
-        <button class="btn btn-ghost" @click="router.push('/settings')">
-          定时任务
-        </button>
-        <button
-          class="btn btn-primary"
-          :disabled="creating || !store.currentProject"
-          @click="handleNewAudit"
-        >
-          {{ creating ? '审计中...' : '+ 新建审计' }}
-        </button>
-      </div>
-    </div>
 
-    <!-- Score Cards -->
-    <div v-if="hasData" class="score-row">
-      <ScoreCard
-        v-for="card in scoreCards"
-        :key="card.label"
-        :label="card.label"
-        :value="card.value"
-        :suffix="card.suffix"
-        :status="card.status"
-        :change="card.change"
-        :change-dir="card.changeDir"
-        :benchmark="card.benchmark"
-        :alert-badge="card.alertBadge"
+      <!-- Score Cards -->
+      <div v-if="hasData" class="score-row">
+        <ScoreCard
+          v-for="card in scoreCards"
+          :key="card.label"
+          :label="card.label"
+          :value="card.value"
+          :suffix="card.suffix"
+          :status="card.status"
+          :change="card.change"
+          :change-dir="card.changeDir"
+          :benchmark="card.benchmark"
+          :alert-badge="card.alertBadge"
+        />
+      </div>
+
+      <!-- Empty State -->
+      <EmptyState
+        v-else
+        icon="🔍"
+        title="开始您的首次 AI 可见性审计"
+        description="添加品牌和 Prompt 后，点击「新建审计」开始分析"
+        action-label="+ 新建审计"
+        @action="handleNewAudit"
       />
-    </div>
 
-    <!-- Empty State -->
-    <div v-else class="empty-state">
-      <div class="empty-icon">🔍</div>
-      <h3>开始您的首次 AI 可见性审计</h3>
-      <p>添加品牌和 Prompt 后，点击"新建审计"开始分析</p>
-    </div>
+      <!-- Platform Grid -->
+      <PlatformGrid
+        v-if="hasData && report"
+        :platform-scores="report.platform_scores"
+      />
 
-    <!-- Platform Grid -->
-    <PlatformGrid
-      v-if="hasData && report"
-      :platform-scores="report.platform_scores"
-    />
-
-    <!-- Trend + Competitor two-col layout -->
-    <div v-if="store.currentProject" class="two-col">
-      <TrendChart :project-id="store.currentProject.id" />
-      <CompetitorTable :brands="store.brands" :report="report" />
-    </div>
-
-    <!-- Insights -->
-    <InsightCard
-      v-if="hasData && report"
-      :insights="report.insights"
-    />
-
-    <!-- CTA Card -->
-    <div v-if="ctaInfo && ctaInfo.score < 70" class="cta-card">
-      <div>
-        <h3>立即提升 {{ ctaInfo.platform }} 可见性（当前 {{ ctaInfo.score }} 分）</h3>
-        <p>{{ ctaInfo.platform }} 是当前可见性最弱的平台。获取针对性的内容优化方案，提升品牌在 6 个 AI 平台上的推荐率。</p>
+      <!-- Trend + Competitor two-col layout -->
+      <div v-if="store.currentProject" class="two-col">
+        <TrendChart :project-id="store.currentProject.id" />
+        <CompetitorTable :brands="store.brands" :report="report" />
       </div>
-      <button class="btn btn-cta" @click="router.push('/suggestions')">查看优化方案 →</button>
-    </div>
+
+      <!-- Insights -->
+      <InsightCard
+        v-if="hasData && report"
+        :insights="report.insights"
+      />
+
+      <!-- CTA Card -->
+      <div v-if="ctaInfo && ctaInfo.score < 70" class="cta-card">
+        <div>
+          <h3>立即提升 {{ ctaInfo.platform }} 可见性（当前 {{ ctaInfo.score }} 分）</h3>
+          <p>{{ ctaInfo.platform }} 是当前可见性最弱的平台。获取针对性的内容优化方案，提升品牌在 6 个 AI 平台上的推荐率。</p>
+        </div>
+        <button class="btn btn-cta" @click="router.push('/suggestions')">查看优化方案 →</button>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -306,37 +347,9 @@ onMounted(async () => {
   gap: 8px;
 }
 
-.btn {
-  padding: 7px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-  border: none;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-weight: 500;
-  transition: all 0.15s ease;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: var(--accent);
-  color: var(--bg-base);
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #00e8bb;
-}
-
-.btn-ghost {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
 }
 
 .text-muted {
@@ -403,13 +416,7 @@ onMounted(async () => {
 }
 
 .btn-cta {
-  background: var(--accent);
-  color: var(--bg-base);
   white-space: nowrap;
-}
-
-.btn-cta:hover {
-  background: #00e8bb;
 }
 
 @media (max-width: 768px) {

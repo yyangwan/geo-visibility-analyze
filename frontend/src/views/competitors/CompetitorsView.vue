@@ -6,22 +6,21 @@ import { RadarChart, BarChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent, GridComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useProjectStore } from '../../stores/project'
+import { PLATFORM_LABELS } from '../../constants/platforms'
+import { ElMessage } from 'element-plus'
 import { getLatestReport, getAuditResults, type QueryResult } from '../../api/client'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import ErrorState from '../../components/common/ErrorState.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 
 use([CanvasRenderer, RadarChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent])
 
 const store = useProjectStore()
 const results = ref<QueryResult[]>([])
 const loading = ref(false)
+const error = ref('')
 
-const platformNames: Record<string, string> = {
-  deepseek: 'DeepSeek',
-  qwen: '通义千问',
-  doubao: '豆包',
-  kimi: 'Kimi',
-  wenxin: '文心一言',
-  hunyuan: '腾讯元宝',
-}
+const platformNames = PLATFORM_LABELS
 
 const radarOption = computed(() => {
   const platforms = Object.keys(platformNames)
@@ -151,14 +150,16 @@ const barOption = computed(() => {
 async function loadData() {
   if (!store.currentProject) return
   loading.value = true
+  error.value = ''
   try {
     const { data: report } = await getLatestReport(store.currentProject.id)
     if (report?.audit_id) {
       const { data } = await getAuditResults(report.audit_id)
       results.value = data
     }
-  } catch {
-    results.value = []
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || '加载竞品数据失败'
+    ElMessage.error(error.value)
   } finally {
     loading.value = false
   }
@@ -179,7 +180,10 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div v-if="results.length > 0" class="content">
+    <LoadingSkeleton v-if="loading" variant="chart" />
+    <ErrorState v-else-if="error" :message="error" @retry="loadData" />
+
+    <div v-else-if="results.length > 0" class="content">
       <!-- Radar Chart -->
       <div class="chart-card">
         <div class="section-title">平台维度雷达图</div>
@@ -195,6 +199,7 @@ onMounted(async () => {
       <!-- Detail Table -->
       <div class="chart-card">
         <div class="section-title">详细结果</div>
+        <div class="table-scroll">
         <table class="detail-table">
           <thead>
             <tr>
@@ -224,14 +229,16 @@ onMounted(async () => {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
 
-    <div v-else class="empty">
-      <div class="empty-icon">⚔️</div>
-      <h3>暂无竞品对比数据</h3>
-      <p>完成首次审计后，此处将展示多维度竞品分析</p>
-    </div>
+    <EmptyState
+      v-else
+      icon="⚔️"
+      title="暂无竞品对比数据"
+      description="完成首次审计后，此处将展示多维度竞品分析"
+    />
   </div>
 </template>
 
@@ -244,19 +251,6 @@ onMounted(async () => {
 }
 
 .header h1 { font-size: 18px; font-weight: 600; }
-
-.btn {
-  padding: 7px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-  border: none;
-  font-weight: 500;
-  transition: all 0.15s;
-}
-
-.btn-primary { background: var(--accent); color: var(--bg-base); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .content {
   display: flex;
@@ -320,14 +314,4 @@ onMounted(async () => {
 .tag-accent { background: rgba(76,201,240,0.12); color: var(--accent-blue); }
 
 .text-muted { color: var(--text-muted); }
-
-.empty {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-muted);
-}
-
-.empty-icon { font-size: 48px; margin-bottom: 16px; }
-.empty h3 { font-size: 16px; color: var(--text-primary); margin-bottom: 8px; }
-.empty p { font-size: 13px; }
 </style>

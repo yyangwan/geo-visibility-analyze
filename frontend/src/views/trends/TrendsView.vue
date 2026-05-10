@@ -12,11 +12,16 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useProjectStore } from '../../stores/project'
+import { PLATFORM_LABELS } from '../../constants/platforms'
+import { ElMessage } from 'element-plus'
 import {
   getTrendData,
   getAuditsHistory,
   type TrendPoint,
 } from '../../api/client'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import ErrorState from '../../components/common/ErrorState.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 
 use([
   CanvasRenderer,
@@ -32,17 +37,11 @@ use([
 const store = useProjectStore()
 const trendData = ref<TrendPoint[]>([])
 const loading = ref(false)
+const error = ref('')
 const period = ref<'daily' | 'weekly' | 'monthly'>('daily')
 const limit = ref(30)
 
-const platformLabels: Record<string, string> = {
-  deepseek: 'DeepSeek',
-  qwen: '通义千问',
-  doubao: '豆包',
-  kimi: 'Kimi',
-  wenxin: '文心一言',
-  hunyuan: '腾讯元宝',
-}
+const platformLabels = PLATFORM_LABELS
 
 // Quick range presets
 const rangePresets = [
@@ -223,6 +222,7 @@ async function fetchData() {
   if (!projectId) return
 
   loading.value = true
+  error.value = ''
   try {
     const [trendRes, historyRes] = await Promise.all([
       getTrendData(projectId, period.value, limit.value),
@@ -230,9 +230,9 @@ async function fetchData() {
     ])
     trendData.value = trendRes.data.data
     auditsHistory.value = historyRes.data
-  } catch {
-    trendData.value = []
-    auditsHistory.value = []
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || '加载趋势数据失败'
+    ElMessage.error(error.value)
   } finally {
     loading.value = false
   }
@@ -292,7 +292,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="loading" class="loading-state">加载中...</div>
+    <LoadingSkeleton v-if="loading" variant="chart" />
+    <ErrorState v-else-if="error" :message="error" @retry="fetchData" />
 
     <template v-else-if="trendData.length > 0">
       <!-- Summary Cards -->
@@ -348,7 +349,8 @@ onMounted(async () => {
         <!-- Platform Breakdown -->
         <div class="chart-card">
           <div class="section-title">平台趋势详情</div>
-          <table v-if="platformStats.length > 0" class="platform-table">
+          <div v-if="platformStats.length > 0" class="table-scroll">
+          <table class="platform-table">
             <thead>
               <tr>
                 <th>平台</th>
@@ -392,6 +394,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
           <div v-else class="no-data-sm">暂无平台数据</div>
         </div>
 
@@ -430,11 +433,12 @@ onMounted(async () => {
     </template>
 
     <!-- Empty State -->
-    <div v-else class="empty">
-      <div class="empty-icon">📈</div>
-      <h3>暂无趋势数据</h3>
-      <p>完成多次审计后，此处将展示可见性变化趋势</p>
-    </div>
+    <EmptyState
+      v-else
+      icon="📈"
+      title="暂无趋势数据"
+      description="完成多次审计后，此处将展示可见性变化趋势"
+    />
   </div>
 </template>
 
@@ -695,36 +699,6 @@ onMounted(async () => {
   padding: 24px;
   color: var(--text-muted);
   font-size: 12px;
-}
-
-/* Loading */
-.loading-state {
-  text-align: center;
-  padding: 60px;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-/* Empty */
-.empty {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-muted);
-}
-
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.empty h3 {
-  font-size: 16px;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.empty p {
-  font-size: 13px;
 }
 
 @media (max-width: 768px) {

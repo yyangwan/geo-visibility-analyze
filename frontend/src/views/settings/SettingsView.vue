@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useProjectStore } from '../../stores/project'
+import { PLATFORM_LABELS } from '../../constants/platforms'
 import { createProject, addBrand } from '../../api/client'
 
 const store = useProjectStore()
@@ -96,8 +97,8 @@ onMounted(() => {
     <div class="section">
       <h2>平台状态</h2>
       <div class="platform-list">
-        <div v-for="p in ['DeepSeek', '通义千问', '豆包', 'Kimi', '文心一言', '腾讯元宝']" :key="p" class="platform-status">
-          <span class="platform-name">{{ p }}</span>
+        <div v-for="(label, key) in PLATFORM_LABELS" :key="key" class="platform-status">
+          <span class="platform-name">{{ label }}</span>
           <span class="status-dot pending"></span>
           <span class="status-text">未配置</span>
         </div>

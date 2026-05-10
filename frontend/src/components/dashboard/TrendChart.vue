@@ -11,6 +11,7 @@ import {
   DataZoomComponent,
 } from 'echarts/components'
 import VChart from 'vue-echarts'
+import { PLATFORM_LABELS } from '../../constants/platforms'
 import { getTrendData, type TrendPoint } from '../../api/client'
 
 use([
@@ -42,7 +43,7 @@ const chartOption = computed(() => {
   })
 
   const platformSeries = Array.from(platformNames).map(platform => ({
-    name: platformLabel[platform] || platform,
+    name: PLATFORM_LABELS[platform] || platform,
     type: 'line' as const,
     smooth: true,
     symbol: 'circle',
@@ -58,7 +59,7 @@ const chartOption = computed(() => {
       textStyle: { color: '#e4e4e7', fontSize: 12 },
     },
     legend: {
-      data: ['综合评分', '提及率(%)', ...Array.from(platformNames).map(p => platformLabel[p] || p)],
+      data: ['综合评分', '提及率(%)', ...Array.from(platformNames).map(p => PLATFORM_LABELS[p] || p)],
       textStyle: { color: '#71717a', fontSize: 10 },
       bottom: 0,
     },
@@ -117,15 +118,6 @@ const chartOption = computed(() => {
     ],
   }
 })
-
-const platformLabel: Record<string, string> = {
-  deepseek: 'DeepSeek',
-  qwen: '通义千问',
-  doubao: '豆包',
-  kimi: 'Kimi',
-  wenxin: '文心一言',
-  hunyuan: '腾讯元宝',
-}
 
 async function fetchTrend() {
   try {

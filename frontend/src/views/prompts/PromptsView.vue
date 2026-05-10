@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
 import { addPrompt, deletePrompt, generatePrompts } from '../../api/client'
 
@@ -37,7 +38,7 @@ async function handleAutoGenerate() {
     await generatePrompts(store.currentProject.id, 10)
     await store.fetchPrompts(store.currentProject.id)
   } catch (e: any) {
-    alert(e?.response?.data?.detail || 'AI生成失败，请检查平台配置')
+    ElMessage.error(e?.response?.data?.detail || 'AI生成失败，请检查平台配置')
   } finally {
     generating.value = false
   }
@@ -109,19 +110,6 @@ onMounted(() => {
 }
 
 .header h1 { font-size: 18px; font-weight: 600; }
-
-.btn {
-  padding: 7px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-  border: none;
-  font-weight: 500;
-  transition: all 0.15s;
-}
-
-.btn-primary { background: var(--accent); color: var(--bg-base); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .add-form {
   display: flex;
