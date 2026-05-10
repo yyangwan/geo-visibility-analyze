@@ -21,5 +21,5 @@ Key routing rules:
 
 - **Progress**: `~/.gstack/projects/geo-visibility-analyze/progress.md`
 - **Plan**: `~/.gstack/projects/geo-visibility-analyze/implementation-plan-20260510.md`
-- **Phase**: All lanes (A+B+C) + test infrastructure complete
-- **Next**: Pre-existing issues (auth tenancy, dead links, sidebar badge)
+- **Phase**: All features + fixes complete, production-ready
+- **Next**: Optional polish (code splitting, backend tests)
