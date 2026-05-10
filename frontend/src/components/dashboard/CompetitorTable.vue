@@ -1,10 +1,53 @@
 <script setup lang="ts">
-import type { Brand, Report } from '../../api/client'
+import { computed } from 'vue'
+import type { Brand, Report, QueryResult } from '../../api/client'
 
 const props = defineProps<{
   brands: Brand[]
   report?: Report | null
+  results?: QueryResult[]
 }>()
+
+interface BrandRow {
+  id: number
+  name: string
+  is_competitor: boolean
+  mentionRate: number
+  recommendRate: number
+  avgConfidence: number
+  score: number
+}
+
+const rows = computed(() => {
+  if (!props.results || !props.results.length) return []
+
+  return props.brands.map(brand => {
+    const brandResults = props.results!.filter(r => r.brand_name === brand.name)
+    const total = brandResults.length
+    const mentions = brandResults.filter(r => r.mention_found).length
+    const recommended = brandResults.filter(r => r.is_recommended).length
+    const confidences = brandResults.filter(r => r.mention_confidence != null).map(r => r.mention_confidence!)
+
+    const mentionRate = total > 0 ? mentions / total : 0
+    const recommendRate = total > 0 ? recommended / total : 0
+    const avgConfidence = confidences.length > 0
+      ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+      : 0
+
+    // Score: same formula as backend report_service
+    const score = Math.round(mentionRate * 50 + recommendRate * 30 + avgConfidence * 20)
+
+    return {
+      id: brand.id,
+      name: brand.name,
+      is_competitor: brand.is_competitor,
+      mentionRate,
+      recommendRate,
+      avgConfidence,
+      score,
+    } as BrandRow
+  }).sort((a, b) => b.score - a.score)
+})
 
 function getScoreClass(score: number): string {
   if (score >= 70) return 'pill-high'
@@ -12,31 +55,10 @@ function getScoreClass(score: number): string {
   return 'pill-low'
 }
 
-// Compute per-brand score from report insights
-// Use a deterministic score from brand index if no report data
-function getBrandScore(brand: Brand, index: number): number {
-  if (!props.report?.platform_scores) return 70 - index * 5
-  // Use overall_score adjusted by brand type
-  if (!brand.is_competitor) return Math.round(props.report.overall_score)
-  return Math.max(20, Math.round(props.report.overall_score - (index * 7)))
-}
-
-function getMentionRate(brand: Brand, index: number): string {
-  if (!props.report) return '-'
-  if (!brand.is_competitor) return `${Math.round(props.report.mention_rate * 100)}%`
-  return `${Math.max(10, Math.round(props.report.mention_rate * 100) - (index * 6))}%`
-}
-
-function getSentiment(brand: Brand, index: number): { label: string; class: string } {
-  if (!brand.is_competitor) {
-    const rate = props.report?.sentiment_positive_rate ?? 0.8
-    return rate >= 0.75
-      ? { label: '正面', class: 'tag-good' }
-      : { label: '中性', class: 'tag-warn' }
-  }
-  return index <= 2
-    ? { label: '正面', class: 'tag-good' }
-    : { label: '中性', class: 'tag-warn' }
+function getSentiment(confidence: number): { label: string; class: string } {
+  if (confidence >= 0.75) return { label: '正面', class: 'tag-good' }
+  if (confidence >= 0.5) return { label: '中性', class: 'tag-warn' }
+  return { label: '负面', class: 'tag-bad' }
 }
 </script>
 
@@ -46,42 +68,47 @@ function getSentiment(brand: Brand, index: number): { label: string; class: stri
       竞品对比
       <span class="sub">{{ brands.length }} 个品牌</span>
     </div>
-    <table class="comp-table">
-      <thead>
-        <tr>
-          <th>品牌</th>
-          <th>可见性</th>
-          <th>提及率</th>
-          <th>情感</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="(brand, i) in brands"
-          :key="brand.id"
-          :class="{ 'brand-row': !brand.is_competitor }"
-        >
-          <td :class="brand.is_competitor ? 'competitor' : 'brand-name'">
-            {{ brand.name }}
-            <span v-if="!brand.is_competitor" class="you-tag">（你）</span>
-          </td>
-          <td>
-            <span class="score-pill" :class="getScoreClass(getBrandScore(brand, i))">
-              {{ getBrandScore(brand, i) }}
-            </span>
-          </td>
-          <td>{{ getMentionRate(brand, i) }}</td>
-          <td>
-            <span
-              class="tag"
-              :class="getSentiment(brand, i).class"
-            >
-              {{ getSentiment(brand, i).label }}
-            </span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-if="rows.length > 0" class="table-scroll">
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th>品牌</th>
+            <th>可见性</th>
+            <th>提及率</th>
+            <th>推荐率</th>
+            <th>情感</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in rows"
+            :key="row.id"
+            :class="{ 'brand-row': !row.is_competitor }"
+          >
+            <td :class="row.is_competitor ? 'competitor' : 'brand-name'">
+              {{ row.name }}
+              <span v-if="!row.is_competitor" class="you-tag">（你）</span>
+            </td>
+            <td>
+              <span class="score-pill" :class="getScoreClass(row.score)">
+                {{ row.score }}
+              </span>
+            </td>
+            <td>{{ Math.round(row.mentionRate * 100) }}%</td>
+            <td>{{ Math.round(row.recommendRate * 100) }}%</td>
+            <td>
+              <span
+                class="tag"
+                :class="getSentiment(row.avgConfidence).class"
+              >
+                {{ getSentiment(row.avgConfidence).label }}
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-else class="no-data">暂无对比数据</div>
   </div>
 </template>
 
@@ -178,4 +205,12 @@ function getSentiment(brand: Brand, index: number): { label: string; class: stri
 
 .tag-good { background: rgba(0, 212, 170, 0.12); color: var(--status-good); }
 .tag-warn { background: rgba(251, 191, 36, 0.12); color: var(--status-warn); }
+.tag-bad { background: rgba(239, 68, 68, 0.12); color: var(--status-bad); }
+
+.no-data {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 </style>

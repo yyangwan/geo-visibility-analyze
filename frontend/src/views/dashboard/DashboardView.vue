@@ -17,11 +17,8 @@ import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
 import ErrorState from '../../components/common/ErrorState.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
 import AuditProgressCard from '../../components/common/AuditProgressCard.vue'
+import OnboardingWizard from '../../components/common/OnboardingWizard.vue'
 import ScoreCard from '../../components/dashboard/ScoreCard.vue'
-import PlatformGrid from '../../components/dashboard/PlatformGrid.vue'
-import CompetitorTable from '../../components/dashboard/CompetitorTable.vue'
-import InsightCard from '../../components/dashboard/InsightCard.vue'
-import TrendChart from '../../components/dashboard/TrendChart.vue'
 
 const router = useRouter()
 const store = useProjectStore()
@@ -30,6 +27,7 @@ const exporting = ref(false)
 const activeAuditId = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
+const showOnboarding = ref(false)
 const previousScore = ref<number | null>(null)
 const previousMention = ref<number | null>(null)
 const nextScheduleTime = ref<string | null>(null)
@@ -147,6 +145,12 @@ function onAuditError(msg: string) {
   ElMessage.error(msg)
 }
 
+function onOnboardingDone() {
+  showOnboarding.value = false
+  loading.value = true
+  onMounted()
+}
+
 async function loadPreviousData() {
   if (!store.currentProject) return
   try {
@@ -179,7 +183,9 @@ onMounted(async () => {
   error.value = ''
   try {
     await store.fetchProjects()
-    if (store.currentProject) {
+    if (!store.projects.length) {
+      showOnboarding.value = true
+    } else if (store.currentProject) {
       try {
         const { data } = await getLatestReport(store.currentProject.id)
         store.report = data
@@ -215,8 +221,11 @@ async function retryLoad() {
 
 <template>
   <div class="dashboard">
+    <!-- Onboarding Wizard -->
+    <OnboardingWizard v-if="showOnboarding" @done="onOnboardingDone" />
+
     <!-- Loading -->
-    <LoadingSkeleton v-if="loading" variant="card" :count="4" />
+    <LoadingSkeleton v-else-if="loading" variant="card" :count="4" />
 
     <!-- Error -->
     <ErrorState v-else-if="error" :message="error" @retry="retryLoad" />
@@ -263,20 +272,81 @@ async function retryLoad() {
         @error="onAuditError"
       />
 
-      <!-- Score Cards -->
-      <div v-if="hasData" class="score-row">
-        <ScoreCard
-          v-for="card in scoreCards"
-          :key="card.label"
-          :label="card.label"
-          :value="card.value"
-          :suffix="card.suffix"
-          :status="card.status"
-          :change="card.change"
-          :change-dir="card.changeDir"
-          :benchmark="card.benchmark"
-          :alert-badge="card.alertBadge"
-        />
+      <!-- Workspace Layout -->
+      <div v-if="hasData && report" class="workspace">
+        <!-- Left: Dominant Score -->
+        <div class="workspace-left">
+          <div class="hero-score" :class="report.overall_score >= 70 ? 'hero-good' : report.overall_score >= 40 ? 'hero-warn' : 'hero-bad'">
+            <div class="hero-number">{{ Math.round(report.overall_score) }}</div>
+            <div class="hero-label">综合可见性评分</div>
+          </div>
+          <div class="hero-meta">
+            <div class="meta-item" v-if="report.competitor_rank">
+              <span class="meta-value">{{ '#' + report.competitor_rank }}</span>
+              <span class="meta-label">竞品排名</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-value">{{ Math.round(report.mention_rate * 100) }}%</span>
+              <span class="meta-label">提及率</span>
+            </div>
+            <div class="meta-item" v-if="scoreCards[0]?.change">
+              <span class="meta-value" :class="scoreCards[0].changeDir">{{ scoreCards[0].change }}</span>
+              <span class="meta-label">变化</span>
+            </div>
+          </div>
+          <!-- Platform Strip -->
+          <div class="platform-strip">
+            <div
+              v-for="(score, platform) in report.platform_scores"
+              :key="platform"
+              class="strip-item"
+              :class="score >= 70 ? 'strip-good' : score >= 50 ? 'strip-warn' : 'strip-bad'"
+            >
+              <div class="strip-name">{{ PLATFORM_LABELS[platform] || platform }}</div>
+              <div class="strip-bar">
+                <div class="strip-fill" :style="{ width: score + '%' }"></div>
+              </div>
+              <div class="strip-score">{{ Math.round(score) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: KPI Rail + Actions -->
+        <div class="workspace-right">
+          <div class="kpi-rail">
+            <ScoreCard
+              v-for="card in scoreCards"
+              :key="card.label"
+              :label="card.label"
+              :value="card.value"
+              :suffix="card.suffix"
+              :status="card.status"
+              :change="card.change"
+              :change-dir="card.changeDir"
+              :alert-badge="card.alertBadge"
+            />
+          </div>
+
+          <!-- Insights + Actions merged -->
+          <div v-if="report.insights?.length" class="action-section">
+            <div class="action-header">关键发现</div>
+            <ul class="insight-list">
+              <li v-for="(insight, i) in report.insights.slice(0, 4)" :key="i">{{ insight }}</li>
+            </ul>
+          </div>
+
+          <!-- CTA -->
+          <div v-if="ctaInfo && ctaInfo.score < 70" class="cta-inline">
+            <span class="cta-text">{{ ctaInfo.platform }} 评分 {{ ctaInfo.score }}，建议优化</span>
+            <button class="btn btn-cta" @click="router.push('/suggestions')">查看方案 →</button>
+          </div>
+
+          <!-- Nav links to dedicated pages -->
+          <div class="quick-links">
+            <button class="btn btn-ghost" @click="router.push('/trends')">趋势追踪 →</button>
+            <button class="btn btn-ghost" @click="router.push('/competitors')">竞品对比 →</button>
+          </div>
+        </div>
       </div>
 
       <!-- Empty State -->
@@ -289,32 +359,6 @@ async function retryLoad() {
         @action="handleNewAudit"
       />
 
-      <!-- Platform Grid -->
-      <PlatformGrid
-        v-if="hasData && report"
-        :platform-scores="report.platform_scores"
-      />
-
-      <!-- Trend + Competitor two-col layout -->
-      <div v-if="store.currentProject" class="two-col">
-        <TrendChart :project-id="store.currentProject.id" />
-        <CompetitorTable :brands="store.brands" :report="report" />
-      </div>
-
-      <!-- Insights -->
-      <InsightCard
-        v-if="hasData && report"
-        :insights="report.insights"
-      />
-
-      <!-- CTA Card -->
-      <div v-if="ctaInfo && ctaInfo.score < 70" class="cta-card">
-        <div>
-          <h3>立即提升 {{ ctaInfo.platform }} 可见性（当前 {{ ctaInfo.score }} 分）</h3>
-          <p>{{ ctaInfo.platform }} 是当前可见性最弱的平台。获取针对性的内容优化方案，提升品牌在 6 个 AI 平台上的推荐率。</p>
-        </div>
-        <button class="btn btn-cta" @click="router.push('/suggestions')">查看优化方案 →</button>
-      </div>
     </template>
   </div>
 </template>
@@ -328,7 +372,7 @@ async function retryLoad() {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .header h1 {
@@ -358,102 +402,218 @@ async function retryLoad() {
   background: var(--accent);
 }
 
-.meta-divider {
-  color: var(--text-muted);
-}
-
-.schedule-hint {
-  color: var(--text-secondary);
-}
+.meta-divider { color: var(--text-muted); }
+.schedule-hint { color: var(--text-secondary); }
 
 .header-actions {
   display: flex;
   gap: 8px;
 }
 
-.btn-ghost:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--text-muted);
-}
+.text-muted { color: var(--text-muted); }
 
-.text-muted {
-  color: var(--text-muted);
-}
-
-.score-row {
+/* — Workspace Layout — */
+.workspace {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-  margin-bottom: 24px;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-muted);
-}
-
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.empty-state h3 {
-  font-size: 16px;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.empty-state p {
-  font-size: 13px;
-}
-
-.two-col {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr;
-  gap: 14px;
-  margin-bottom: 24px;
-}
-
-.cta-card {
-  background: linear-gradient(135deg, #0f3460 0%, #1a1a2e 50%, #0d1b2a 100%);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  border: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  grid-template-columns: 1fr 380px;
   gap: 20px;
 }
 
-.cta-card h3 {
-  font-size: 14px;
-  margin-bottom: 6px;
-  font-weight: 600;
+.workspace-left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.cta-card p {
-  font-size: 11px;
+.hero-score {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  border: 1px solid var(--border-light);
+  text-align: center;
+}
+
+.hero-good { border-left: 4px solid var(--status-good); }
+.hero-warn { border-left: 4px solid var(--status-warn); }
+.hero-bad { border-left: 4px solid var(--status-bad); }
+
+.hero-number {
+  font-size: 64px;
+  font-weight: 800;
+  font-family: "Inter", monospace;
+  line-height: 1;
+}
+
+.hero-good .hero-number { color: var(--status-good); }
+.hero-warn .hero-number { color: var(--status-warn); }
+.hero-bad .hero-number { color: var(--status-bad); }
+
+.hero-label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.hero-meta {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+}
+
+.meta-item {
+  text-align: center;
+}
+
+.meta-value {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  font-family: "Inter", monospace;
+  display: block;
+}
+
+.meta-value.up { color: var(--status-good); }
+.meta-value.down { color: var(--status-bad); }
+
+.meta-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Platform Strip */
+.platform-strip {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.strip-item {
+  display: grid;
+  grid-template-columns: 90px 1fr 32px;
+  align-items: center;
+  gap: 10px;
+}
+
+.strip-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--text-secondary);
-  line-height: 1.6;
-  max-width: 480px;
 }
 
-.btn-cta {
-  white-space: nowrap;
+.strip-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strip-good .strip-fill { background: var(--status-good); }
+.strip-warn .strip-fill { background: var(--status-warn); }
+.strip-bad .strip-fill { background: var(--status-bad); }
+
+.strip-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.strip-score {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-family: "Inter", monospace;
+  text-align: right;
+}
+
+.strip-good .strip-score { color: var(--status-good); }
+.strip-warn .strip-score { color: var(--status-warn); }
+.strip-bad .strip-score { color: var(--status-bad); }
+
+/* Right Panel */
+.workspace-right {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kpi-rail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.action-section {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+}
+
+.action-header {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.insight-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.insight-list li {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  padding-left: 14px;
+  position: relative;
+  line-height: 1.5;
+}
+
+.insight-list li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.cta-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0, 212, 170, 0.06);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-md);
+}
+
+.cta-text {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.quick-links {
+  display: flex;
+  gap: 8px;
 }
 
 @media (max-width: 768px) {
-  .score-row {
-    grid-template-columns: repeat(2, 1fr);
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .kpi-rail {
+    grid-template-columns: 1fr 1fr;
   }
   .header {
     flex-direction: column;
     gap: 16px;
   }
-  .cta-card {
-    flex-direction: column;
-    text-align: center;
+  .hero-number {
+    font-size: 48px;
   }
 }
 </style>

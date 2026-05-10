@@ -3,6 +3,7 @@ import { PLATFORM_LABELS } from '../../constants/platforms'
 
 const props = defineProps<{
   platformScores: Record<string, number>
+  mentionRates?: Record<string, number>
 }>()
 
 const platformNames = PLATFORM_LABELS
@@ -49,7 +50,7 @@ function getStatusLabel(score: number): string {
           />
         </div>
         <div class="platform-detail">
-          <span>{{ Math.round(score * 0.95) }}% 提及率</span>
+          <span>{{ mentionRates && mentionRates[platform] != null ? Math.round(mentionRates[platform] * 100) + '%' : '-' }}</span>
           <span class="tag" :class="'tag-' + getStatus(score)">
             {{ getStatusLabel(score) }}
           </span>
