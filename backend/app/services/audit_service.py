@@ -25,6 +25,7 @@ from app.models.models import (
     QueryResult,
     QueryStatus,
 )
+from app.services.audit_events import PlatformEvent, publish
 from app.services.detect import detect_mentions
 
 logger = get_logger("audit")
@@ -49,6 +50,7 @@ async def run_audit(audit_id: int) -> None:
             audit.error_message = str(e)
             audit.completed_at = datetime.now(timezone.utc)
             await db.commit()
+            publish(audit_id, PlatformEvent(type="audit_failed", error=str(e)))
             logger.error("audit_failed", audit_id=audit_id, error=str(e))
 
 
@@ -86,33 +88,39 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     platforms = audit.platforms_json or []
     adapters = get_adapters(platforms)
 
-    # Query all platforms concurrently
+    # Query platforms concurrently, publishing progress events as each completes
     all_responses: list[tuple[str, PlatformResponse]] = []
-    tasks = []
-    for adapter in adapters:
-        tasks.append(_query_platform(adapter.platform_name, adapter, prompt_texts))
 
-    platform_results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Wrap each platform query to carry its name through asyncio.as_completed
+    async def _query_and_tag(name: str, adapter, prompts: list[str]):
+        publish(audit.id, PlatformEvent(type="platform_start", platform=name))
+        try:
+            result = await _query_platform(name, adapter, prompts)
+            return name, result, None
+        except Exception as e:
+            return name, None, e
 
-    for i, adapter in enumerate(adapters):
-        res = platform_results[i]
-        if isinstance(res, Exception):
+    tasks = [asyncio.create_task(_query_and_tag(a.platform_name, a, prompt_texts)) for a in adapters]
+
+    for coro in asyncio.as_completed(tasks):
+        platform_name, responses, exc = await coro
+        if exc:
             for pt in prompt_texts:
-                all_responses.append(
-                    (
-                        adapter.platform_name,
-                        PlatformResponse(
-                            platform=adapter.platform_name,
-                            prompt=pt,
-                            response_text="",
-                            error_code=None,
-                            error_message=str(res),
-                        ),
-                    )
-                )
+                all_responses.append((
+                    platform_name,
+                    PlatformResponse(
+                        platform=platform_name,
+                        prompt=pt,
+                        response_text="",
+                        error_code=None,
+                        error_message=str(exc),
+                    ),
+                ))
+            publish(audit.id, PlatformEvent(type="platform_error", platform=platform_name, error=str(exc)))
         else:
-            for resp in res:
-                all_responses.append((adapter.platform_name, resp))
+            for resp in responses:
+                all_responses.append((platform_name, resp))
+            publish(audit.id, PlatformEvent(type="platform_done", platform=platform_name))
 
     # Process responses and detect mentions
     results = []
@@ -182,6 +190,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
 
     audit.completed_at = datetime.now(timezone.utc)
     await db.commit()
+    publish(audit.id, PlatformEvent(type="audit_done"))
     logger.info(
         "audit_completed",
         audit_id=audit.id,

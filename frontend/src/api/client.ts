@@ -178,6 +178,20 @@ export const generatePrompts = (projectId: number, count = 10) =>
     count,
   })
 
+// Audit SSE
+export interface AuditProgressEvent {
+  type: 'platform_start' | 'platform_done' | 'platform_error' | 'audit_done' | 'audit_failed'
+  platform?: string
+  error?: string
+}
+
+export function createAuditEventSource(auditId: number): EventSource {
+  const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+  const token = localStorage.getItem('token')
+  const url = `${baseURL}/audits/${auditId}/events${token ? `?token=${token}` : ''}`
+  return new EventSource(url)
+}
+
 // Auth
 export interface AuthUser {
   id: number

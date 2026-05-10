@@ -16,6 +16,7 @@ import { PLATFORM_LABELS } from '../../constants/platforms'
 import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
 import ErrorState from '../../components/common/ErrorState.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
+import AuditProgressCard from '../../components/common/AuditProgressCard.vue'
 import ScoreCard from '../../components/dashboard/ScoreCard.vue'
 import PlatformGrid from '../../components/dashboard/PlatformGrid.vue'
 import CompetitorTable from '../../components/dashboard/CompetitorTable.vue'
@@ -26,6 +27,7 @@ const router = useRouter()
 const store = useProjectStore()
 const creating = ref(false)
 const exporting = ref(false)
+const activeAuditId = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
 const previousScore = ref<number | null>(null)
@@ -118,17 +120,31 @@ async function handleNewAudit() {
   creating.value = true
   try {
     const { data: audit } = await createAudit({ project_id: store.currentProject.id })
-    let status = audit.status
-    while (status === 'pending' || status === 'running') {
-      await new Promise(r => setTimeout(r, 2000))
-      const { data: updated } = await (await import('../../api/client')).default.get(`/audits/${audit.id}`)
-      status = updated.status
-    }
-    await generateReport(audit.id)
-    await store.fetchReport(audit.id)
-  } finally {
+    activeAuditId.value = audit.id
     creating.value = false
+  } catch (e: any) {
+    creating.value = false
+    ElMessage.error(e?.response?.data?.detail || '创建审计失败')
   }
+}
+
+async function onAuditComplete() {
+  if (activeAuditId.value) {
+    try {
+      await generateReport(activeAuditId.value)
+      await store.fetchReport(activeAuditId.value)
+      ElMessage.success('审计完成，报告已生成')
+    } catch {
+      ElMessage.error('生成报告失败')
+    }
+    activeAuditId.value = null
+    loadPreviousData()
+  }
+}
+
+function onAuditError(msg: string) {
+  activeAuditId.value = null
+  ElMessage.error(msg)
 }
 
 async function loadPreviousData() {
@@ -238,6 +254,14 @@ async function retryLoad() {
           </button>
         </div>
       </div>
+
+      <!-- Audit Progress -->
+      <AuditProgressCard
+        v-if="activeAuditId"
+        :audit-id="activeAuditId"
+        @complete="onAuditComplete"
+        @error="onAuditError"
+      />
 
       <!-- Score Cards -->
       <div v-if="hasData" class="score-row">

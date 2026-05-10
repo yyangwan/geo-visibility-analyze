@@ -1,20 +1,29 @@
 """Audit API endpoints — create, monitor, and retrieve audit results."""
 
 import asyncio
+import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.api.projects import get_user_project
+from app.services.auth_service import decode_access_token
 from app.api.schemas import AuditCreate, AuditOut, QueryResultOut, ReportOut
 from app.database import get_db
 from app.models.models import Audit, Brand, Project, Prompt, QueryResult, Report, User
+from app.services.audit_events import PlatformEvent, subscribe, unsubscribe
 from app.services.audit_service import run_audit
 from app.services.report_service import generate_report
 
 router = APIRouter()
+
+
+def _sse_event(event_type: str, data: dict) -> str:
+    """Format a single SSE event."""
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.post("", response_model=AuditOut)
@@ -102,6 +111,60 @@ async def get_audit_results(
             )
         )
     return out
+
+
+@router.get("/{audit_id}/events")
+async def audit_events(
+    audit_id: int,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """SSE endpoint that streams per-platform completion events."""
+    # Manual auth since EventSource can't send Authorization header
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await db.get(User, int(payload.get("sub", 0)))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    audit = await db.get(Audit, audit_id)
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
+    await get_user_project(audit.project_id, user, db)
+
+    # If already completed, return final state immediately
+    if audit.status.value in ("completed", "partial", "failed"):
+        async def _done():
+            yield _sse_event("audit_done", {"status": audit.status.value})
+        return StreamingResponse(_done(), media_type="text/event-stream")
+
+    queue = subscribe(audit_id)
+
+    async def _stream():
+        try:
+            while True:
+                try:
+                    event: PlatformEvent = await asyncio.wait_for(queue.get(), timeout=30)
+                except asyncio.TimeoutError:
+                    # Heartbeat to keep connection alive
+                    yield ": heartbeat\n\n"
+                    continue
+
+                data = {"type": event.type}
+                if event.platform:
+                    data["platform"] = event.platform
+                if event.error:
+                    data["error"] = event.error
+
+                yield _sse_event(event.type, data)
+
+                if event.type in ("audit_done", "audit_failed"):
+                    break
+        finally:
+            unsubscribe(audit_id, queue)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @router.post("/{audit_id}/report", response_model=ReportOut)
