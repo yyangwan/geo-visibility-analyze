@@ -267,6 +267,19 @@ const compareData = ref<MultiAuditComparison>({
 const auditsHistory = ref<Array<{ id: number; status: string; created_at: string }>>([])
 const selectedAuditIds = ref<number[]>([])
 
+const completedAudits = computed(() =>
+  auditsHistory.value.filter(a => a.status === 'completed' || a.status === 'partial')
+)
+
+function toggleAudit(id: number) {
+  const idx = selectedAuditIds.value.indexOf(id)
+  if (idx >= 0) {
+    selectedAuditIds.value.splice(idx, 1)
+  } else if (selectedAuditIds.value.length < 5) {
+    selectedAuditIds.value.push(id)
+  }
+}
+
 const compareDeltaChartOption = computed(() => {
   const changes = compareData.value.diffs?.competitor_changes || []
   if (changes.length === 0) return {}
@@ -511,23 +524,33 @@ const structureTypeLabels: Record<string, string> = {
       <div class="compare-selector">
         <div class="section-title">选择审计进行对比（2-5个）</div>
         <div class="selector-row">
-          <el-select
-            v-model="selectedAuditIds"
-            multiple
-            placeholder="选择审计"
-            style="width: 400px"
-            :max-collapse-tags="5"
-          >
-            <el-option
-              v-for="audit in auditsHistory.filter((a: any) => a.status === 'completed' || a.status === 'partial')"
+          <div class="audit-checklist">
+            <label
+              v-for="audit in completedAudits"
               :key="audit.id"
-              :label="`审计 #${audit.id} — ${audit.created_at?.slice(0, 16).replace('T', ' ')}`"
-              :value="audit.id"
-            />
-          </el-select>
+              class="audit-check-item"
+              :class="{ checked: selectedAuditIds.includes(audit.id), disabled: selectedAuditIds.length >= 5 && !selectedAuditIds.includes(audit.id) }"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedAuditIds.includes(audit.id)"
+                :disabled="selectedAuditIds.length >= 5 && !selectedAuditIds.includes(audit.id)"
+                @change="toggleAudit(audit.id)"
+                class="audit-checkbox"
+              />
+              <span class="audit-check-label">
+                审计 #{{ audit.id }}
+                <span class="audit-check-date">{{ audit.created_at?.slice(0, 16).replace('T', ' ') }}</span>
+              </span>
+            </label>
+            <div v-if="completedAudits.length === 0" class="no-audits">暂无已完成的审计</div>
+          </div>
           <button class="compare-btn" :disabled="selectedAuditIds.length < 2" @click="runComparison">
             开始对比
           </button>
+        </div>
+        <div v-if="selectedAuditIds.length > 0" class="selected-summary">
+          已选 {{ selectedAuditIds.length }} 个审计
         </div>
       </div>
 
@@ -734,7 +757,72 @@ const structureTypeLabels: Record<string, string> = {
 .selector-row {
   display: flex;
   gap: 12px;
+  align-items: flex-start;
+}
+
+.audit-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+.audit-check-item {
+  display: flex;
   align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.audit-check-item:hover:not(.disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.audit-check-item.checked {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.audit-check-item.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.audit-checkbox {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+
+.audit-check-date {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+.no-audits {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: 12px;
+}
+
+.selected-summary {
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .compare-btn {
