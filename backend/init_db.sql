@@ -146,6 +146,26 @@ CREATE TABLE IF NOT EXISTS source_citations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
+-- 7.6 Response Analyses (NEW)
+-- ============================================
+CREATE TABLE IF NOT EXISTS response_analyses (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  response_record_id   INT            NOT NULL,
+  cited_sources        JSON,
+  brand_sentiment      VARCHAR(20)    NULL,
+  brand_attributes     JSON,
+  topics_covered       JSON,
+  answer_structure     VARCHAR(20)    NULL,
+  competitor_refs      JSON,
+  analysis_model       VARCHAR(100)   NOT NULL DEFAULT '',
+  status               VARCHAR(20)   NOT NULL DEFAULT 'pending',
+  created_at           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX ix_ra_response_record_id (response_record_id),
+  UNIQUE INDEX ix_ra_prr_unique (response_record_id),
+  CONSTRAINT fk_ra_prr FOREIGN KEY (response_record_id) REFERENCES platform_response_records(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================
 -- 8. Reports
 -- ============================================
 CREATE TABLE IF NOT EXISTS reports (

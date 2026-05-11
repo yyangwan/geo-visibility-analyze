@@ -21,6 +21,7 @@ const navItems: { section: string; items: (NavItem & { badge?: number })[] }[] =
     { path: '/trends', icon: '📈', label: '趋势追踪' },
     { path: '/competitors', icon: '⚔️', label: '竞品对比' },
     { path: '/analysis', icon: '🧠', label: '内容洞察' },
+    { path: '/strategic', icon: '🎯', label: '战略智能' },
     { path: '/prompts', icon: '🔍', label: 'Prompt管理' },
   ]},
   { section: '优化', items: [

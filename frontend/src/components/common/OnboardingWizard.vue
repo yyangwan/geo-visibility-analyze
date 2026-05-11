@@ -20,6 +20,7 @@ const totalSteps = 5
 // Step 1: Create project
 const projectName = ref('')
 const projectIndustry = ref('insurance')
+const productCategory = ref('')
 
 // Step 2: Add brand
 const brandName = ref('')
@@ -45,7 +46,7 @@ const stepLabels = [
 ]
 
 const canNext = computed(() => {
-  if (step.value === 0) return projectName.value.trim().length > 0
+  if (step.value === 0) return projectName.value.trim().length > 0 && productCategory.value.trim().length > 0
   if (step.value === 1) return brandName.value.trim().length > 0
   return true
 })
@@ -57,6 +58,7 @@ async function handleNext() {
       const { data } = await createProject({
         name: projectName.value.trim(),
         industry: projectIndustry.value,
+        product_category: productCategory.value.trim(),
       })
       projectId.value = data.id
       await store.fetchProjects()
@@ -164,7 +166,7 @@ function skipWizard() {
       <div class="wizard-body">
         <h2>{{ stepLabels[step] }}</h2>
         <p class="step-desc">
-          <template v-if="step === 0">输入您的项目名称和所属行业，开始追踪品牌在 AI 平台上的可见性。</template>
+          <template v-if="step === 0">输入项目信息，定义您要监测的产品品类。系统将根据品类生成搜索问题，检测品牌在 AI 平台上的可见性。</template>
           <template v-else-if="step === 1">添加您要监测的主品牌名称，可以包含别名（如英文名）。</template>
           <template v-else-if="step === 2">添加主要竞争对手，系统将对比品牌与竞品在 AI 回答中的表现。</template>
           <template v-else-if="step === 3">AI 将根据您的行业和品牌信息自动生成测试 Prompt。</template>
@@ -186,6 +188,9 @@ function skipWizard() {
             <option value="technology">科技</option>
             <option value="other">其他</option>
           </select>
+          <label style="margin-top: 12px">产品品类</label>
+          <input v-model="productCategory" placeholder="如：百万医疗保险、重疾险、车险" @keyup.enter="handleNext" />
+          <p class="hint">用户搜索时使用的是品类词（如"百万医疗保险哪个好"），而非品牌名</p>
         </div>
 
         <!-- Step 1: Add brand -->

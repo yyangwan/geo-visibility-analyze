@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
-import { createProject, addBrand, getPlatforms } from '../../api/client'
+import { createProject, addBrand, getPlatforms, updateProject } from '../../api/client'
 import type { PlatformInfo } from '../../api/client'
 
 const store = useProjectStore()
 const newProjectName = ref('')
 const newProjectIndustry = ref('insurance')
+const newProductCategory = ref('')
 const newBrandName = ref('')
 const newBrandAliases = ref('')
 const newBrandIsCompetitor = ref(false)
@@ -25,8 +27,10 @@ async function handleCreateProject() {
   const { data } = await createProject({
     name: newProjectName.value.trim(),
     industry: newProjectIndustry.value,
+    product_category: newProductCategory.value.trim(),
   })
   newProjectName.value = ''
+  newProductCategory.value = ''
   await store.fetchProjects()
   await store.selectProject(data)
 }
@@ -42,6 +46,29 @@ async function handleAddBrand() {
   newBrandAliases.value = ''
   newBrandIsCompetitor.value = false
   await store.fetchBrands(store.currentProject.id)
+}
+
+const editCategory = ref<string | null>(null)
+const savingCategory = ref(false)
+
+async function handleSaveCategory() {
+  if (!store.currentProject || editCategory.value === null) return
+  savingCategory.value = true
+  try {
+    await updateProject(store.currentProject.id, { product_category: editCategory.value.trim() })
+    await store.fetchProjects()
+    const p = store.projects.find(proj => proj.id === store.currentProject?.id)
+    if (p) await store.selectProject(p)
+    editCategory.value = null
+    ElMessage.success('品类已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  }
+  savingCategory.value = false
+}
+
+function startEditCategory() {
+  editCategory.value = store.currentProject?.product_category || ''
 }
 
 async function fetchPlatforms() {
@@ -76,6 +103,25 @@ onMounted(() => {
             <option :value="undefined" disabled>选择项目</option>
             <option v-for="p in store.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
+          <div v-if="store.currentProject" class="project-info">
+            <span class="info-label">品类：</span>
+            <span v-if="store.currentProject.product_category" class="info-value">{{ store.currentProject.product_category }}</span>
+            <span v-else class="info-empty">未设置</span>
+            <button class="btn-edit" @click="startEditCategory" title="编辑品类">编辑</button>
+          </div>
+          <div v-if="editCategory !== null" class="form-row" style="margin-top: 6px">
+            <input
+              v-model="editCategory"
+              class="input"
+              style="width: 200px"
+              placeholder="如：百万医疗保险"
+              @keyup.enter="handleSaveCategory"
+            />
+            <button class="btn btn-primary" :disabled="savingCategory" @click="handleSaveCategory">
+              {{ savingCategory ? '保存中...' : '保存' }}
+            </button>
+            <button class="btn btn-ghost" @click="editCategory = null">取消</button>
+          </div>
         </div>
         <div class="form-row" style="margin-top: 8px">
           <div class="field-group" style="width: 200px">
@@ -101,6 +147,10 @@ onMounted(() => {
               <option value="food">餐饮</option>
               <option value="technology">科技</option>
             </select>
+          </div>
+          <div class="field-group" style="width: 200px">
+            <label class="field-label">产品品类</label>
+            <input v-model="newProductCategory" class="input" placeholder="如：百万医疗保险" />
           </div>
           <button class="btn btn-primary self-end" :disabled="!newProjectName.trim()" @click="handleCreateProject">
             创建项目
@@ -341,4 +391,38 @@ onMounted(() => {
 .platform-status-text { font-size: var(--text-xs); }
 .platform-status-text.text-ok { color: var(--status-good); }
 .platform-status-text.text-muted { color: var(--text-muted); }
+
+/* Project info */
+.project-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  margin-top: 6px;
+}
+.info-label { color: var(--text-muted); font-size: var(--text-xs); }
+.info-value { color: var(--accent); font-weight: 500; }
+.info-empty { color: var(--text-muted); font-style: italic; }
+.btn-edit {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: var(--text-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.btn-edit:hover { color: var(--accent); border-color: var(--accent); }
+.btn-ghost {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.btn-ghost:hover { border-color: var(--text-secondary); }
 </style>

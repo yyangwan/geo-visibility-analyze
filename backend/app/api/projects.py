@@ -9,6 +9,7 @@ from app.api.schemas import (
     BrandOut,
     ProjectCreate,
     ProjectOut,
+    ProjectUpdate,
     PromptCreate,
     PromptOut,
     PromptGenerateRequest,
@@ -37,7 +38,7 @@ async def create_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    project = Project(name=data.name, industry=data.industry, user_id=current_user.id)
+    project = Project(name=data.name, industry=data.industry, product_category=data.product_category, user_id=current_user.id)
     db.add(project)
     await db.commit()
     await db.refresh(project)
@@ -64,6 +65,25 @@ async def get_project(
     db: AsyncSession = Depends(get_db),
 ):
     return await get_user_project(project_id, current_user, db)
+
+
+@router.patch("/{project_id}", response_model=ProjectOut)
+async def update_project(
+    project_id: int,
+    data: ProjectUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await get_user_project(project_id, current_user, db)
+    if data.name is not None:
+        project.name = data.name
+    if data.industry is not None:
+        project.industry = data.industry
+    if data.product_category is not None:
+        project.product_category = data.product_category
+    await db.commit()
+    await db.refresh(project)
+    return project
 
 
 @router.post("/{project_id}/brands", response_model=BrandOut)
@@ -160,19 +180,17 @@ async def generate_prompts_endpoint(
     """Auto-generate prompts using AI."""
     project = await get_user_project(project_id, current_user, db)
 
-    # Get primary brand name
+    # Get all brand names for context enrichment
     result = await db.execute(
-        select(Brand).where(
-            Brand.project_id == project_id,
-            Brand.is_competitor == False,  # noqa: E712
-        ).limit(1)
+        select(Brand).where(Brand.project_id == project_id)
     )
-    brand = result.scalar_one_or_none()
-    brand_name = brand.name if brand else project.name
+    brands = result.scalars().all()
+    brand_names = [b.name for b in brands]
 
     generated = await generate_prompts(
-        brand_name=brand_name,
+        product_category=project.product_category,
         industry=project.industry,
+        brand_names=brand_names,
         count=data.count,
     )
 

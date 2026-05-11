@@ -148,6 +148,7 @@ class PlatformResponseRecord(Base):
     # relationships
     audit_rel: Mapped["Audit"] = relationship(back_populates="response_records")
     query_results: Mapped[list["QueryResult"]] = relationship(back_populates="response_record")
+    analysis: Mapped["ResponseAnalysis | None"] = relationship(back_populates="response_record_rel")
 
 
 class QueryResult(Base):
@@ -238,6 +239,34 @@ class ScheduledJob(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_audit_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ResponseAnalysis(Base):
+    """Per-response analysis results: positioning, sentiment, topics, structure.
+
+    One row per PlatformResponseRecord (unique FK). Created by
+    ResponseAnalysisService as an async background task after audit completes.
+    """
+    __tablename__ = "response_analyses"
+    __table_args__ = (
+        Index("ix_ra_response_record_id", "response_record_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    response_record_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("platform_response_records.id"), unique=True
+    )
+    cited_sources: Mapped[list] = mapped_column(JSON, default=list)
+    brand_sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    brand_attributes: Mapped[list] = mapped_column(JSON, default=list)
+    topics_covered: Mapped[list] = mapped_column(JSON, default=list)
+    answer_structure: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    competitor_refs: Mapped[list] = mapped_column(JSON, default=list)
+    analysis_model: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    response_record_rel: Mapped["PlatformResponseRecord"] = relationship(back_populates="analysis")
 
 
 class SourceCitation(Base):

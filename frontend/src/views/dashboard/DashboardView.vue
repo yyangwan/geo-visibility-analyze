@@ -234,8 +234,9 @@ async function retryLoad() {
       <!-- Header -->
       <div class="header">
         <div>
-          <h1>{{ store.currentProject?.name || 'AI Scope' }} · AI搜索可见性报告</h1>
+          <h1>{{ store.currentProject?.name || '智见' }} · AI搜索可见性报告</h1>
           <div class="header-meta">
+            <span v-if="store.currentProject?.product_category" class="category-tag">{{ store.currentProject.product_category }}</span>
             <span v-if="hasData" class="freshness">
               <span class="dot-green"></span>
               基于 {{ store.prompts.length }} 条 Prompt · {{ store.report?.platform_scores ? Object.keys(store.report.platform_scores).length : 0 }} 个平台
@@ -387,6 +388,15 @@ async function retryLoad() {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.category-tag {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .freshness {

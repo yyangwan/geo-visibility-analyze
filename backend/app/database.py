@@ -20,19 +20,3 @@ class Base(DeclarativeBase):
 async def get_db():
     async with async_session() as session:
         yield session
-
-
-async def init_db():
-    """Run Alembic migrations on startup."""
-    from alembic import command
-    from alembic.config import Config
-
-    alembic_cfg = Config("alembic.ini")
-    # Point to the correct script location (relative to backend/)
-    alembic_cfg.set_main_option("script_location", "alembic")
-
-    # Use sync URL for Alembic
-    db_url = settings.database_url.replace("+aiomysql", "+pymysql")
-    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-
-    command.upgrade(alembic_cfg, "head")

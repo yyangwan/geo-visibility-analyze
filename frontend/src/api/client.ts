@@ -288,4 +288,65 @@ export const retryAnalysis = (auditId: number) =>
 export const getContentIntelligence = (projectId: number) =>
   api.get<ContentIntelligence>(`/analysis/projects/${projectId}/content-intelligence`)
 
+// Strategic Intelligence
+export interface SourceAuthorityTrends {
+  audits: Array<{ audit_id: number; date: string; total_sources: number }>
+  domain_trends: Array<{ domain: string; data: Array<{ audit_id: number; count: number; authority_avg: number }> }>
+  platform_preferences: Array<{ platform: string; top_domains: Array<{ domain: string; count: number }> }>
+  authority_trend: Record<string, string[]>
+}
+
+export interface CompetitorPositioning {
+  brands: Array<{
+    name: string
+    is_competitor: boolean
+    mention_frequency: number
+    sentiment_positive_rate: number
+    avg_authority: number
+    mention_count: number
+    trajectory: Array<{ audit_id: number; date: string; mention_rate: number; sentiment_positive_rate: number }>
+  }>
+  quadrant_labels: Record<string, string>
+}
+
+export interface AnswerStructureEvolution {
+  audits: Array<{ audit_id: number; date: string }>
+  structure_distribution: Record<string, Array<{ audit_id: number; count: number; pct: number }>>
+  platform_structure: Record<string, Record<string, number>>
+  correlation: Record<string, { mention_rate: number; avg_position: number | null }>
+  transitions: Array<{ audit_id: number; platform: string; prev_structure: string | null; new_structure: string }>
+}
+
+export interface MultiAuditComparison {
+  audits: Array<{
+    audit_id: number
+    date: string
+    overall_score: number
+    mention_rate: number
+    sentiment_breakdown: Record<string, number>
+    top_sources: Array<{ domain: string; count: number }>
+    competitor_mention_rates: Array<{ brand: string; mention_rate: number }>
+    structure_distribution: Record<string, number>
+    topic_distribution: Record<string, number>
+  }>
+  diffs: {
+    mention_rate_delta: number
+    score_delta: number
+    source_changes: { added: string[]; removed: string[] }
+    competitor_changes: Array<{ brand: string; delta: number }>
+  }
+}
+
+export const getSourceAuthorityTrends = (projectId: number, limit = 10) =>
+  api.get<SourceAuthorityTrends>(`/strategic/projects/${projectId}/source-authority-trends`, { params: { limit } })
+
+export const getCompetitorPositioning = (projectId: number) =>
+  api.get<CompetitorPositioning>(`/strategic/projects/${projectId}/competitor-positioning`)
+
+export const getStructureEvolution = (projectId: number, limit = 10) =>
+  api.get<AnswerStructureEvolution>(`/strategic/projects/${projectId}/structure-evolution`, { params: { limit } })
+
+export const compareAudits = (projectId: number, auditIds: number[]) =>
+  api.post<MultiAuditComparison>(`/strategic/projects/${projectId}/compare-audits`, { audit_ids: auditIds })
+
 export default api

@@ -204,3 +204,96 @@ class ContentIntelligenceOut(BaseModel):
     analysis_status: dict[str, int] = {}
     total_responses: int = 0
     analyzed_responses: int = 0
+
+
+# --- Strategic Intelligence ---
+
+# P3.1: Source Authority Trends
+class SourceAuthorityAuditPoint(BaseModel):
+    audit_id: int
+    date: str
+    total_sources: int
+
+class DomainTrendPoint(BaseModel):
+    audit_id: int
+    count: int
+    authority_avg: float
+
+class DomainTrend(BaseModel):
+    domain: str
+    data: list[DomainTrendPoint]
+
+class PlatformSourcePreference(BaseModel):
+    platform: str
+    top_domains: list[dict]
+
+class SourceAuthorityTrendsOut(BaseModel):
+    audits: list[SourceAuthorityAuditPoint] = []
+    domain_trends: list[DomainTrend] = []
+    platform_preferences: list[PlatformSourcePreference] = []
+    authority_trend: dict[str, list[str]] = {}
+
+
+# P3.2: Competitor Positioning Map
+class BrandPositioningTrajectoryPoint(BaseModel):
+    audit_id: int
+    date: str
+    mention_rate: float
+    sentiment_positive_rate: float
+
+class BrandPositioning(BaseModel):
+    name: str
+    is_competitor: bool
+    mention_frequency: float
+    sentiment_positive_rate: float
+    avg_authority: float
+    mention_count: int
+    trajectory: list[BrandPositioningTrajectoryPoint]
+
+class CompetitorPositioningOut(BaseModel):
+    brands: list[BrandPositioning] = []
+    quadrant_labels: dict[str, str] = {}
+
+
+# P3.3: Answer Structure Evolution
+class StructureEvolutionPoint(BaseModel):
+    audit_id: int
+    count: int
+    pct: float
+
+class StructureTransition(BaseModel):
+    audit_id: int
+    platform: str
+    prev_structure: str | None
+    new_structure: str
+
+class StructureCorrelation(BaseModel):
+    mention_rate: float
+    avg_position: float | None
+
+class AnswerStructureEvolutionOut(BaseModel):
+    audits: list[dict] = []
+    structure_distribution: dict[str, list[StructureEvolutionPoint]] = {}
+    platform_structure: dict[str, dict[str, int]] = {}
+    correlation: dict[str, StructureCorrelation] = {}
+    transitions: list[StructureTransition] = []
+
+
+# P3.4: Multi-Audit Comparison
+class MultiAuditComparisonRequest(BaseModel):
+    audit_ids: list[int]
+
+class AuditComparisonSnapshot(BaseModel):
+    audit_id: int
+    date: str
+    overall_score: float
+    mention_rate: float
+    sentiment_breakdown: dict[str, int]
+    top_sources: list[dict]
+    competitor_mention_rates: list[dict]
+    structure_distribution: dict[str, int]
+    topic_distribution: dict[str, int]
+
+class MultiAuditComparisonOut(BaseModel):
+    audits: list[AuditComparisonSnapshot] = []
+    diffs: dict = {}
