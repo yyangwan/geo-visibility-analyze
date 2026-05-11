@@ -3,14 +3,16 @@
 Orchestrates the full audit pipeline:
 1. Load project, prompts and brands
 2. Query each platform via adapters
-3. Detect brand mentions in responses
-4. Store results and update audit status
+3. Create PlatformResponseRecords (one per prompt+platform)
+4. Run source extraction synchronously
+5. Detect brand mentions in responses
+6. Store results and update audit status
 """
 
 import asyncio
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import PlatformResponse
@@ -20,13 +22,16 @@ from app.logging_config import get_logger
 from app.models.models import (
     Audit,
     Brand,
+    PlatformResponseRecord,
     Project,
     Prompt,
     QueryResult,
     QueryStatus,
+    SourceCitation,
 )
 from app.services.audit_events import PlatformEvent, publish
 from app.services.detect import detect_mentions
+from app.services.source_extraction import extract_sources
 
 logger = get_logger("audit")
 
@@ -88,10 +93,9 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     platforms = audit.platforms_json or []
     adapters = get_adapters(platforms)
 
-    # Query platforms concurrently, publishing progress events as each completes
+    # ── Phase 1: Query platforms concurrently ──
     all_responses: list[tuple[str, PlatformResponse]] = []
 
-    # Wrap each platform query to carry its name through asyncio.as_completed
     async def _query_and_tag(name: str, adapter, prompts: list[str]):
         publish(audit.id, PlatformEvent(type="platform_start", platform=name))
         try:
@@ -122,12 +126,66 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
                 all_responses.append((platform_name, resp))
             publish(audit.id, PlatformEvent(type="platform_done", platform=platform_name))
 
-    # Process responses and detect mentions
+    # ── Phase 2: Create PlatformResponseRecords + source extraction ──
+    # Group responses by (prompt_text, platform) to create one PRR each
+    response_records: dict[tuple[str, str], PlatformResponseRecord] = {}
+
+    for platform_name, resp in all_responses:
+        prompt_obj = next((p for p in prompts if p.text == resp.prompt), None)
+        if not prompt_obj:
+            continue
+
+        key = (resp.prompt, platform_name)
+        if key in response_records:
+            continue  # Already created for this prompt+platform
+
+        # Run source extraction synchronously
+        extracted = []
+        if resp.success and resp.response_text:
+            extracted = extract_sources(
+                resp.response_text,
+                api_citations=resp.citations,
+            )
+
+        # Build citations JSON from extraction results
+        citations_json = [
+            {"domain": s.domain, "urls": s.urls, "title": s.title}
+            for s in extracted
+        ]
+
+        prr = PlatformResponseRecord(
+            audit_id=audit.id,
+            prompt_id=prompt_obj.id,
+            platform=platform_name,
+            response_text=resp.response_text if resp.success else None,
+            citations=citations_json,
+            prompt_tokens=resp.prompt_tokens,
+            completion_tokens=resp.completion_tokens,
+            response_model=resp.response_model,
+            finish_reason=resp.finish_reason,
+            search_enabled=resp.search_enabled,
+            error=resp.error_message if not resp.success else None,
+        )
+        db.add(prr)
+        response_records[key] = prr
+
+        # Upsert SourceCitations (sync, part of audit pipeline)
+        if extracted:
+            await _upsert_source_citations(
+                db, audit.project_id, audit.id, platform_name, extracted
+            )
+
+    await db.flush()  # Flush PRRs to get IDs before creating QueryResults
+
+    # ── Phase 3: Create QueryResults with mention detection ──
     results = []
     for platform_name, resp in all_responses:
         prompt_obj = next((p for p in prompts if p.text == resp.prompt), None)
         if not prompt_obj:
             continue
+
+        key = (resp.prompt, platform_name)
+        prr = response_records.get(key)
 
         for brand in brands:
             qr = QueryResult(
@@ -136,6 +194,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
                 brand_id=brand.id,
                 platform=platform_name,
                 response_text=resp.response_text if resp.success else None,
+                response_record_id=prr.id if prr else None,
                 error=resp.error_message if not resp.success else None,
             )
 
@@ -155,7 +214,6 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
                     qr.is_recommended = best.is_recommended
 
                     if best.is_recommended:
-                        # Compute actual rank among all recommended brands
                         all_recommended: list[tuple[str, int]] = []
                         for b in brands:
                             b_mentions = detect_mentions(
@@ -196,7 +254,44 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
         audit_id=audit.id,
         status=audit.status.value,
         results=len(results),
+        response_records=len(response_records),
     )
+
+
+async def _upsert_source_citations(
+    db: AsyncSession,
+    project_id: int,
+    audit_id: int,
+    platform: str,
+    sources: list,
+) -> None:
+    """Upsert SourceCitation rows using INSERT ON DUPLICATE KEY UPDATE.
+
+    Handles race condition from concurrent platform responses citing
+    the same domain by using MySQL's native upsert.
+    """
+    for source in sources:
+        urls_json = source.urls if source.urls else []
+
+        # Use raw SQL for atomic upsert (race-condition safe)
+        await db.execute(
+            text("""
+                INSERT INTO source_citations
+                    (project_id, audit_id, domain, urls, citation_count, platform, created_at)
+                VALUES
+                    (:project_id, :audit_id, :domain, :urls, 1, :platform, NOW())
+                ON DUPLICATE KEY UPDATE
+                    citation_count = citation_count + 1,
+                    urls = JSON_MERGE_PRESERVE(urls, :urls)
+            """),
+            {
+                "project_id": project_id,
+                "audit_id": audit_id,
+                "domain": source.domain,
+                "urls": __import__("json").dumps(urls_json),
+                "platform": platform,
+            },
+        )
 
 
 async def _query_platform(

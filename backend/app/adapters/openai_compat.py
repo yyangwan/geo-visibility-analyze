@@ -24,6 +24,8 @@ class OpenAICompatAdapter(PlatformAdapter):
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+    # Subclasses override to enable platform-specific search mode
+    search_enabled: bool = False
 
     def __init__(self):
         self.timeout = settings.query_timeout_seconds
@@ -32,12 +34,27 @@ class OpenAICompatAdapter(PlatformAdapter):
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                proxy=None,  # bypass system proxy — domestic APIs don't need it
+            )
         return self._client
 
     async def query(self, prompts: list[str]) -> list[PlatformResponse]:
         tasks = [self._query_single(p) for p in prompts]
         return await asyncio.gather(*tasks)
+
+    def _build_request_body(self, prompt: str) -> dict:
+        """Build the JSON body for the API request. Subclasses override for search mode."""
+        return {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }
+
+    def _extract_citations(self, data: dict) -> list[dict]:
+        """Extract structured citations from API response. Subclasses override."""
+        return []
 
     async def _query_single(self, prompt: str) -> PlatformResponse:
         async with self.semaphore:
@@ -47,11 +64,7 @@ class OpenAICompatAdapter(PlatformAdapter):
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.3,
-                    },
+                    json=self._build_request_body(prompt),
                 )
 
                 latency = int((time.monotonic() - start) * 1000)
@@ -91,11 +104,21 @@ class OpenAICompatAdapter(PlatformAdapter):
                         latency_ms=latency,
                     )
 
+                # Extract usage/metadata
+                usage = data.get("usage", {})
+                citations = self._extract_citations(data)
+
                 return PlatformResponse(
                     platform=self.platform_name,
                     prompt=prompt,
                     response_text=text,
                     latency_ms=latency,
+                    citations=citations,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                    response_model=data.get("model", self.model),
+                    finish_reason=data.get("choices", [{}])[0].get("finish_reason", ""),
+                    search_enabled=self.search_enabled,
                 )
 
             except httpx.TimeoutException:

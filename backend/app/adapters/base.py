@@ -36,6 +36,13 @@ class PlatformResponse:
     error_code: ErrorCode | None = None
     error_message: str | None = None
     latency_ms: int = 0
+    # Enrichment fields (populated by adapters with search mode)
+    citations: list[dict] = field(default_factory=list)  # [{url, title, domain}]
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    response_model: str = ""
+    finish_reason: str = ""
+    search_enabled: bool = False
 
     @property
     def success(self) -> bool:
