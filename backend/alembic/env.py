@@ -17,6 +17,9 @@ db_url = os.getenv("AISCOPE_DATABASE_URL")
 if db_url:
     # Alembic needs a sync driver — replace async driver with sync
     db_url = db_url.replace("+aiomysql", "+pymysql")
+    # Ensure utf8mb4 charset for emoji support
+    if "charset=" not in db_url:
+        db_url += "?charset=utf8mb4"
     config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
