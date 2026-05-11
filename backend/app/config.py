@@ -42,8 +42,11 @@ class Settings(BaseSettings):
     hunyuan_model: str = "hunyuan-lite"
 
     # Query settings
-    query_timeout_seconds: int = 30
+    query_timeout_seconds: int = 60
     max_concurrent_per_platform: int = 5
+
+    # Analysis settings
+    analysis_timeout_seconds: int = 120
 
     # LLM for internal tasks (prompt gen, suggestions). Defaults to DeepSeek.
     llm_api_key: str = ""

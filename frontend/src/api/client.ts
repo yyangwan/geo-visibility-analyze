@@ -34,6 +34,7 @@ export interface Project {
   id: number
   name: string
   industry: string
+  product_category: string
   created_at: string
 }
 
@@ -90,8 +91,10 @@ export interface Report {
 
 // Projects
 export const getProjects = () => api.get<Project[]>('/projects')
-export const createProject = (data: { name: string; industry?: string }) =>
+export const createProject = (data: { name: string; industry?: string; product_category?: string }) =>
   api.post<Project>('/projects', data)
+export const updateProject = (id: number, data: Partial<{ name: string; industry: string; product_category: string }>) =>
+  api.patch<Project>(`/projects/${id}`, data)
 
 // Brands
 export const getBrands = (projectId: number) =>
@@ -243,5 +246,46 @@ export const toggleSchedule = (jobId: number) =>
   api.patch<ScheduledJob>(`/schedules/${jobId}/toggle`)
 export const deleteSchedule = (jobId: number) =>
   api.delete(`/schedules/${jobId}`)
+
+// Analysis
+export interface ResponseAnalysis {
+  id: number
+  response_record_id: number
+  platform: string | null
+  prompt_text: string | null
+  cited_sources: Array<{ domain: string; authority_score?: number }>
+  brand_sentiment: string | null
+  brand_attributes: string[]
+  topics_covered: string[]
+  answer_structure: string | null
+  competitor_refs: string[]
+  analysis_model: string
+  status: string
+  created_at: string
+}
+
+export interface ContentIntelligence {
+  topic_distribution: Record<string, number>
+  sentiment_breakdown: Record<string, number>
+  answer_structure_distribution: Record<string, number>
+  top_cited_sources: Array<{ domain: string; total_count: number; authority_avg: number }>
+  brand_positioning_heatmap: Record<string, Record<string, string>>
+  token_cost_summary: { total_prompt_tokens: number; total_completion_tokens: number }
+  analysis_status: Record<string, number>
+  total_responses: number
+  analyzed_responses: number
+}
+
+export const getAuditAnalysis = (auditId: number) =>
+  api.get<ResponseAnalysis[]>(`/analysis/audits/${auditId}/analysis`)
+
+export const triggerAnalysis = (auditId: number) =>
+  api.post(`/analysis/audits/${auditId}/analyze`)
+
+export const retryAnalysis = (auditId: number) =>
+  api.post(`/analysis/audits/${auditId}/analyze/retry`)
+
+export const getContentIntelligence = (projectId: number) =>
+  api.get<ContentIntelligence>(`/analysis/projects/${projectId}/content-intelligence`)
 
 export default api

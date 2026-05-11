@@ -25,12 +25,20 @@ class UserOut(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     industry: str = "insurance"
+    product_category: str = ""
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    industry: str | None = None
+    product_category: str | None = None
 
 
 class ProjectOut(BaseModel):
     id: int
     name: str
     industry: str
+    product_category: str
     user_id: int
     created_at: datetime
 
@@ -164,3 +172,35 @@ class PromptGenerateRequest(BaseModel):
     industry: str = ""
     brand_name: str = ""
     count: int = 10
+
+
+# --- Response Analysis ---
+class ResponseAnalysisOut(BaseModel):
+    id: int
+    response_record_id: int
+    platform: str | None = None
+    prompt_text: str | None = None
+    cited_sources: list = []
+    brand_sentiment: str | None = None
+    brand_attributes: list = []
+    topics_covered: list = []
+    answer_structure: str | None = None
+    competitor_refs: list = []
+    analysis_model: str = ""
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ContentIntelligenceOut(BaseModel):
+    """Aggregated content intelligence for a project's latest audit."""
+    topic_distribution: dict[str, int] = {}
+    sentiment_breakdown: dict[str, int] = {}
+    answer_structure_distribution: dict[str, int] = {}
+    top_cited_sources: list[dict] = []
+    brand_positioning_heatmap: dict[str, dict[str, str]] = {}
+    token_cost_summary: dict[str, int] = {}
+    analysis_status: dict[str, int] = {}
+    total_responses: int = 0
+    analyzed_responses: int = 0

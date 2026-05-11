@@ -12,7 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.models import Brand, QueryResult, Report, Suggestion
+from app.models.models import (
+    Brand,
+    PlatformResponseRecord,
+    QueryResult,
+    Report,
+    ResponseAnalysis,
+    Suggestion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +78,11 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
         weak_platforms=weak_platforms,
     )
 
+    # Enrich with response analysis data if available
+    analysis_context = await _get_analysis_context(db, report.audit_id)
+    if analysis_context:
+        user_prompt += f"\n\n深度分析数据：\n{analysis_context}"
+
     # Call LLM
     suggestions_json = await _call_llm(user_prompt)
 
@@ -94,6 +106,39 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
             await db.refresh(s)
 
     return suggestions
+
+
+async def _get_analysis_context(db: AsyncSession, audit_id: int) -> str:
+    """Build analysis context string from ResponseAnalysis data."""
+    result = await db.execute(
+        select(ResponseAnalysis)
+        .join(PlatformResponseRecord, ResponseAnalysis.response_record_id == PlatformResponseRecord.id)
+        .where(PlatformResponseRecord.audit_id == audit_id)
+        .where(ResponseAnalysis.status == "completed")
+    )
+    analyses = result.scalars().all()
+    if not analyses:
+        return ""
+
+    from collections import Counter
+    sentiment_counts = Counter(a.brand_sentiment for a in analyses if a.brand_sentiment)
+    all_topics = [t for a in analyses for t in (a.topics_covered or [])]
+    all_competitors = set(c for a in analyses for c in (a.competitor_refs or []))
+    all_attributes = [attr for a in analyses for attr in (a.brand_attributes or [])]
+    attr_counts = Counter(all_attributes).most_common(5)
+
+    parts = []
+    if sentiment_counts:
+        parts.append(f"品牌情感分布: {dict(sentiment_counts)}")
+    if all_topics:
+        topic_counts = Counter(all_topics).most_common(10)
+        parts.append(f"常见话题: {', '.join(t for t, _ in topic_counts)}")
+    if all_competitors:
+        parts.append(f"竞品被提及: {', '.join(all_competitors)}")
+    if attr_counts:
+        parts.append(f"品牌属性标签: {', '.join(f'{a}({c})' for a, c in attr_counts)}")
+
+    return "\n".join(parts)
 
 
 def _get_weak_platforms(platform_scores: dict) -> str:

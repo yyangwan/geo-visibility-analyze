@@ -20,6 +20,7 @@ const navItems: { section: string; items: (NavItem & { badge?: number })[] }[] =
     { path: '/dashboard', icon: '📊', label: '可见性概览' },
     { path: '/trends', icon: '📈', label: '趋势追踪' },
     { path: '/competitors', icon: '⚔️', label: '竞品对比' },
+    { path: '/analysis', icon: '🧠', label: '内容洞察' },
     { path: '/prompts', icon: '🔍', label: 'Prompt管理' },
   ]},
   { section: '优化', items: [
@@ -51,7 +52,7 @@ onMounted(() => {
   <nav class="sidebar" :class="{ collapsed }" aria-label="主导航">
     <div class="sidebar-logo" @click="collapsed = !collapsed" role="button" tabindex="0" aria-label="收起/展开侧边栏">
       <div class="dot"></div>
-      <template v-if="!collapsed">AI<span>Scope</span></template>
+      <template v-if="!collapsed">智<span>见</span></template>
     </div>
 
     <template v-for="group in navItems" :key="group.section">

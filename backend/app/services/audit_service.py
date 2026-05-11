@@ -257,6 +257,10 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
         response_records=len(response_records),
     )
 
+    # Trigger response analysis as background task
+    from app.services.response_analysis_service import run_analysis_for_audit
+    asyncio.create_task(run_analysis_for_audit(audit.id))
+
 
 async def _upsert_source_citations(
     db: AsyncSession,
