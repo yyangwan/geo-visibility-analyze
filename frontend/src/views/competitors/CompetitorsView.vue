@@ -41,6 +41,72 @@ const mentionCount = computed(() => {
   return base.filter(r => r.mention_found).length
 })
 
+// Brand column order: primary brands first, then competitors
+const brandColumns = computed(() => {
+  const primary = store.brands.filter(b => !b.is_competitor).map(b => b.name)
+  const competitors = store.brands.filter(b => b.is_competitor).map(b => b.name)
+  return [...primary, ...competitors]
+})
+
+interface GroupedRow {
+  platform: string
+  promptText: string
+  brandResults: Record<string, QueryResult | undefined>
+  mentionGap: number // 0 = my brand mentioned, higher = worse for me
+}
+
+const groupedResults = computed(() => {
+  const source = filteredResults.value
+  const primaryBrand = store.brands.find(b => !b.is_competitor)?.name
+
+  // Group by (platform, prompt_text)
+  const groupMap = new Map<string, Map<string, QueryResult[]>>()
+  for (const r of source) {
+    if (!r.brand_name) continue
+    const pKey = r.platform
+    const qKey = r.prompt_text || ''
+    if (!groupMap.has(pKey)) groupMap.set(pKey, new Map())
+    const promptMap = groupMap.get(pKey)!
+    if (!promptMap.has(qKey)) promptMap.set(qKey, [])
+    promptMap.get(qKey)!.push(r)
+  }
+
+  // Build rows
+  const rows: GroupedRow[] = []
+  for (const [platform, promptMap] of groupMap) {
+    for (const [promptText, resultList] of promptMap) {
+      const brandResults: Record<string, QueryResult | undefined> = {}
+      for (const r of resultList) {
+        brandResults[r.brand_name!] = r
+      }
+      // Mention gap: 0 = primary mentioned, +1 per competitor that outranks primary
+      let gap = 0
+      const primaryResult = primaryBrand ? brandResults[primaryBrand] : undefined
+      if (!primaryResult || !primaryResult.mention_found) {
+        gap = 100 // Primary not mentioned = worst case
+      } else {
+        // Count competitors with better rank
+        for (const [brand, r] of Object.entries(brandResults)) {
+          if (brand === primaryBrand || !r) continue
+          if (r.mention_found && r.recommendation_rank != null && primaryResult.recommendation_rank != null) {
+            if (r.recommendation_rank < primaryResult.recommendation_rank) gap++
+          }
+        }
+      }
+      rows.push({ platform, promptText, brandResults, mentionGap: gap })
+    }
+  }
+
+  // Sort: platform alphabetical, then by mention gap descending (losses first)
+  rows.sort((a, b) => {
+    const pComp = a.platform.localeCompare(b.platform)
+    if (pComp !== 0) return pComp
+    return b.mentionGap - a.mentionGap
+  })
+
+  return rows
+})
+
 const radarOption = computed(() => {
   const platforms = Object.keys(platformNames)
   const brands = store.brands.filter(b => !b.is_competitor).map(b => b.name)
@@ -213,10 +279,10 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- Detail Table -->
+      <!-- Detail Table (grouped pivot) -->
       <div class="chart-card">
         <div class="table-toolbar">
-          <div class="section-title">详细结果 <span class="count">{{ filteredResults.length }} / {{ results.length }}</span></div>
+          <div class="section-title">详细对比 <span class="count">{{ groupedResults.length }} 组查询</span></div>
           <div class="filter-bar">
             <div class="filter-chips">
               <button
@@ -240,40 +306,53 @@ onMounted(async () => {
           </div>
         </div>
         <div class="table-scroll">
-          <table class="detail-table">
+          <table class="detail-table pivot-table">
             <thead>
               <tr>
                 <th class="col-platform">平台</th>
                 <th class="col-prompt">Prompt</th>
-                <th class="col-brand">品牌</th>
-                <th class="col-mention">提及</th>
-                <th class="col-rec">推荐</th>
-                <th class="col-conf">置信度</th>
+                <th
+                  v-for="brand in brandColumns"
+                  :key="brand"
+                  class="col-brand"
+                  :class="{ 'col-primary': !store.brands.find(b => b.name === brand)?.is_competitor }"
+                >
+                  {{ brand }}
+                  <span v-if="!store.brands.find(b => b.name === brand)?.is_competitor" class="you-tag">（你）</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in filteredResults" :key="r.id" :class="{ 'row-error': r.error, 'row-mention': r.mention_found }">
+              <tr v-for="(row, idx) in groupedResults" :key="idx">
                 <td>
-                  <span class="platform-dot" :style="{ background: `var(--plat-${r.platform}, #71717a)` }"></span>
-                  {{ platformNames[r.platform] || r.platform }}
+                  <span class="platform-dot" :style="{ background: `var(--plat-${row.platform}, #71717a)` }"></span>
+                  {{ platformNames[row.platform] || row.platform }}
                 </td>
-                <td class="prompt-cell" :title="r.prompt_text">{{ r.prompt_text || '-' }}</td>
-                <td>{{ r.brand_name }}</td>
-                <td>
-                  <span :class="r.mention_found ? 'tag-good' : 'tag-bad'" class="tag">
-                    {{ r.mention_found ? '是' : '否' }}
-                  </span>
+                <td class="prompt-cell" :title="row.promptText">{{ row.promptText || '-' }}</td>
+                <td
+                  v-for="brand in brandColumns"
+                  :key="brand"
+                  class="cell-result"
+                  :class="{
+                    'cell-primary': !store.brands.find(b => b.name === brand)?.is_competitor,
+                    'cell-mentioned': row.brandResults[brand]?.mention_found,
+                    'cell-loss': !row.brandResults[brand]?.mention_found && Object.values(row.brandResults).some(r => r?.mention_found),
+                  }"
+                >
+                  <template v-if="row.brandResults[brand]?.mention_found">
+                    <span class="tag tag-good">✓</span>
+                    <span v-if="row.brandResults[brand]!.is_recommended && row.brandResults[brand]!.recommendation_rank" class="rank-badge">
+                      #{{ row.brandResults[brand]!.recommendation_rank }}
+                    </span>
+                    <span v-if="row.brandResults[brand]!.mention_confidence" class="conf-text">
+                      {{ (row.brandResults[brand]!.mention_confidence * 100).toFixed(0) }}%
+                    </span>
+                  </template>
+                  <span v-else-if="row.brandResults[brand]" class="text-muted">-</span>
                 </td>
-                <td>
-                  <span v-if="r.is_recommended" class="tag tag-accent">
-                    推荐<span v-if="r.recommendation_rank"> #{{ r.recommendation_rank }}</span>
-                  </span>
-                  <span v-else class="text-muted">-</span>
-                </td>
-                <td>{{ r.mention_confidence ? (r.mention_confidence * 100).toFixed(0) + '%' : '-' }}</td>
               </tr>
-              <tr v-if="filteredResults.length === 0">
-                <td colspan="6" class="empty-hint">无匹配结果，试试调整筛选条件</td>
+              <tr v-if="groupedResults.length === 0">
+                <td :colspan="2 + brandColumns.length" class="empty-hint">无匹配结果，试试调整筛选条件</td>
               </tr>
             </tbody>
           </table>
@@ -445,10 +524,12 @@ onMounted(async () => {
 
 .col-platform { width: 100px; }
 .col-prompt { min-width: 180px; }
-.col-brand { width: 90px; }
-.col-mention { width: 60px; text-align: center; }
-.col-rec { width: 80px; text-align: center; }
-.col-conf { width: 70px; text-align: center; }
+.col-brand { min-width: 90px; text-align: center; }
+
+.col-primary {
+  color: var(--accent) !important;
+  background: var(--accent-dim) !important;
+}
 
 .detail-table td {
   padding: 8px 12px;
@@ -457,8 +538,42 @@ onMounted(async () => {
 
 .detail-table tbody tr:hover td { background: var(--bg-hover); }
 
-.row-error td { opacity: 0.5; }
-.row-mention td { background: rgba(0, 212, 170, 0.03); }
+/* --- Pivot cell styles --- */
+.cell-result {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.cell-primary {
+  background: var(--accent-dim);
+}
+
+.cell-mentioned {
+  background: rgba(0, 212, 170, 0.04);
+}
+
+.cell-loss {
+  background: rgba(239, 68, 68, 0.03);
+}
+
+.rank-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-blue, #4cc9f0);
+  margin-left: 2px;
+}
+
+.conf-text {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-left: 3px;
+}
+
+.you-tag {
+  font-size: 9px;
+  color: var(--accent);
+  font-weight: 400;
+}
 
 .platform-dot {
   display: inline-block;
@@ -502,5 +617,7 @@ onMounted(async () => {
   .table-toolbar { flex-direction: column; }
   .filter-bar { width: 100%; }
   .table-scroll { max-height: 400px; }
+  .col-prompt { min-width: 120px; }
+  .col-brand { min-width: 70px; }
 }
 </style>
