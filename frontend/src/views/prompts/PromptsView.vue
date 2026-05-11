@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
 import { addPrompt, deletePrompt, generatePrompts } from '../../api/client'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import EmptyState from '../../components/common/EmptyState.vue'
 
 const store = useProjectStore()
 const newPromptText = ref('')
@@ -16,18 +19,26 @@ const categories = [
 
 async function handleAdd() {
   if (!newPromptText.value.trim() || !store.currentProject) return
-  await addPrompt(store.currentProject.id, {
-    text: newPromptText.value.trim(),
-    category: newPromptCategory.value,
-  })
-  newPromptText.value = ''
-  await store.fetchPrompts(store.currentProject.id)
+  try {
+    await addPrompt(store.currentProject.id, {
+      text: newPromptText.value.trim(),
+      category: newPromptCategory.value,
+    })
+    newPromptText.value = ''
+    await store.fetchPrompts(store.currentProject.id)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '添加失败')
+  }
 }
 
 async function handleDelete(promptId: number) {
   if (!store.currentProject) return
-  await deletePrompt(store.currentProject.id, promptId)
-  await store.fetchPrompts(store.currentProject.id)
+  try {
+    await deletePrompt(store.currentProject.id, promptId)
+    await store.fetchPrompts(store.currentProject.id)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '删除失败')
+  }
 }
 
 async function handleAutoGenerate() {
@@ -36,8 +47,8 @@ async function handleAutoGenerate() {
   try {
     await generatePrompts(store.currentProject.id, 10)
     await store.fetchPrompts(store.currentProject.id)
-  } catch {
-    // silently fail — button state already resets
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || 'AI生成失败')
   } finally {
     generating.value = false
   }
@@ -78,7 +89,8 @@ onMounted(() => {
     </div>
 
     <!-- Prompt List -->
-    <div class="prompt-list">
+    <LoadingSkeleton v-if="store.prompts.length === 0 && !store.currentProject" variant="list" :count="5" />
+    <div v-else class="prompt-list">
       <div v-for="prompt in store.prompts" :key="prompt.id" class="prompt-item">
         <div class="prompt-content">
           <span class="prompt-text">{{ prompt.text }}</span>
@@ -86,9 +98,12 @@ onMounted(() => {
         </div>
         <button class="btn-delete" @click="handleDelete(prompt.id)">删除</button>
       </div>
-      <div v-if="store.prompts.length === 0" class="empty">
-        暂无 Prompt，请添加
-      </div>
+      <EmptyState
+        v-if="store.prompts.length === 0"
+        icon="🔍"
+        title="暂无 Prompt"
+        description="请添加 Prompt 或使用 AI 自动生成"
+      />
     </div>
   </div>
 </template>
@@ -174,11 +189,4 @@ onMounted(() => {
   transition: all var(--duration-fast);
 }
 .btn-delete:hover { color: var(--status-bad); background: rgba(239, 68, 68, 0.1); }
-
-.empty {
-  text-align: center;
-  padding: var(--space-8) var(--space-4);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
 </style>

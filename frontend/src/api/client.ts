@@ -17,13 +17,17 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Auto-logout on 401
+// Auto-logout on 401 + network error handling
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
       window.location.href = '/login'
+    }
+    // Network error (server unreachable, DNS failure, CORS block)
+    if (!err.response) {
+      err.response = { data: { detail: '网络连接失败，请检查网络后重试' } }
     }
     return Promise.reject(err)
   }

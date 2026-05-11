@@ -13,6 +13,11 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     build: ./backend
@@ -32,10 +37,21 @@ services:
       AISCOPE_LLM_MODEL: ${LLM_MODEL:-}
       # Auth
       AISCOPE_SECRET_KEY: ${AISCOPE_SECRET_KEY:?AISCOPE_SECRET_KEY must be set}
+      # CORS (comma-separated origins, default: allow all)
+      AISCOPE_CORS_ORIGINS: ${AISCOPE_CORS_ORIGINS:-*}
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
       - ./backend:/app
+    # Dev override: use --reload for hot-reloading
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   frontend:
     build: ./frontend

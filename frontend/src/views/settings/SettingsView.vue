@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
 import { createProject, addBrand, getPlatforms, updateProject } from '../../api/client'
 import type { PlatformInfo } from '../../api/client'
+import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
 
 const store = useProjectStore()
 const newProjectName = ref('')
@@ -13,7 +14,7 @@ const newBrandName = ref('')
 const newBrandAliases = ref('')
 const newBrandIsCompetitor = ref(false)
 const platforms = ref<PlatformInfo[]>([])
-
+const platformsLoading = ref(true)
 const selectedProjectId = computed({
   get: () => store.currentProject?.id,
   set: (id: number | undefined) => {
@@ -72,11 +73,14 @@ function startEditCategory() {
 }
 
 async function fetchPlatforms() {
+  platformsLoading.value = true
   try {
     const { data } = await getPlatforms()
     platforms.value = data
   } catch {
     platforms.value = []
+  } finally {
+    platformsLoading.value = false
   }
 }
 
@@ -207,7 +211,8 @@ onMounted(() => {
     <div class="card">
       <div class="card-title">平台状态</div>
       <div class="card-body">
-        <div v-if="platforms.length" class="platform-grid">
+        <LoadingSkeleton v-if="platformsLoading" variant="card" :count="3" />
+        <div v-else-if="platforms.length" class="platform-grid">
           <div v-for="p in platforms" :key="p.key" class="platform-card" :class="{ configured: p.configured }">
             <span class="dot" :class="p.configured ? 'dot-ok' : 'dot-muted'"></span>
             <div class="platform-info">
@@ -218,7 +223,7 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <div v-else class="empty">加载中...</div>
+        <div v-else class="empty">暂无平台数据</div>
       </div>
     </div>
   </div>

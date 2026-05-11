@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model: str = ""
 
+    # CORS
+    cors_origins: str = "*"
+
     # Auth
     secret_key: str = ""
     access_token_expire_minutes: int = 1440  # 24h

@@ -412,6 +412,8 @@ onMounted(async () => {
 .table-scroll {
   max-height: 520px;
   overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   margin-top: 12px;
   border-radius: 6px;
   border: 1px solid var(--border-light);

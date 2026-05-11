@@ -10,11 +10,13 @@ import {
   type Suggestion,
 } from '../../api/client'
 import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
+import ErrorState from '../../components/common/ErrorState.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
 
 const store = useProjectStore()
 const suggestions = ref<Suggestion[]>([])
 const loading = ref(false)
+const error = ref('')
 const generating = ref(false)
 const filterCategory = ref('all')
 const filterStatus = ref<'all' | 'pending' | 'resolved'>('all')
@@ -66,11 +68,12 @@ const stats = computed(() => {
 async function fetchSuggestions() {
   if (!store.currentProject) return
   loading.value = true
+  error.value = ''
   try {
     const { data } = await getSuggestions(store.currentProject.id)
     suggestions.value = data
-  } catch {
-    suggestions.value = []
+  } catch (e: any) {
+    error.value = e?.response?.data?.detail || '加载建议失败'
   } finally {
     loading.value = false
   }
@@ -153,6 +156,7 @@ onMounted(async () => {
     </div>
 
     <LoadingSkeleton v-if="loading" variant="list" :count="6" />
+    <ErrorState v-else-if="error" :message="error" @retry="fetchSuggestions" />
 
     <template v-else-if="suggestions.length > 0">
       <!-- Grouped suggestions -->

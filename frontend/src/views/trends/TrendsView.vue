@@ -628,6 +628,8 @@ onMounted(async () => {
   gap: 0;
   max-height: 400px;
   overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .audit-item {

@@ -32,8 +32,8 @@ const navItems: { section: string; items: (NavItem & { badge?: number })[] }[] =
   ]},
 ]
 
-// Flatten all items for mobile bottom bar
-const allNavItems = navItems.flatMap(g => g.items)
+// Flatten all items for mobile bottom bar (limit to 5 for usability)
+const allNavItems = navItems.flatMap(g => g.items).slice(0, 5)
 
 function handleLogout() {
   auth.logout()

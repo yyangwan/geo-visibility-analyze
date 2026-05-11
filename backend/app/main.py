@@ -31,7 +31,7 @@ app = FastAPI(
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,4 +78,17 @@ def _run_upgrade_sync():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+
+    from app.database import async_session
+
+    try:
+        async with async_session() as db:
+            await db.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "connected"}
+    except Exception:
+        return JSONResponse(
+            {"status": "degraded", "db": "disconnected"},
+            status_code=503,
+        )
