@@ -154,6 +154,16 @@ export const exportReportPdf = (reportId: number) =>
   api.get(`/reports/${reportId}/pdf`, { responseType: 'blob' })
 
 // Suggestions
+export interface SuggestionDetail {
+  action_channel?: string
+  action_type?: string
+  outline?: string[]
+  keywords?: string[]
+  timeline?: { week: string; task: string }[]
+  competitor_ref?: string
+  expected_outcome?: string
+}
+
 export interface Suggestion {
   id: number
   project_id: number
@@ -163,6 +173,7 @@ export interface Suggestion {
   description: string
   priority: string
   is_resolved: boolean
+  detail: SuggestionDetail | null
   created_at: string
 }
 

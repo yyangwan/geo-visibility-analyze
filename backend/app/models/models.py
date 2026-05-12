@@ -222,6 +222,7 @@ class Suggestion(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(String(20), default="medium")
     is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     project: Mapped["Project"] = relationship()

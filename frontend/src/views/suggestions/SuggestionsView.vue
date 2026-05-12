@@ -20,6 +20,15 @@ const error = ref('')
 const generating = ref(false)
 const filterCategory = ref('all')
 const filterStatus = ref<'all' | 'pending' | 'resolved'>('all')
+const expandedIds = ref<Set<number>>(new Set())
+
+function toggleDetail(id: number) {
+  if (expandedIds.value.has(id)) {
+    expandedIds.value.delete(id)
+  } else {
+    expandedIds.value.add(id)
+  }
+}
 
 const categoryLabels: Record<string, string> = {
   content_optimization: '内容优化',
@@ -178,9 +187,61 @@ onMounted(async () => {
                 {{ priorityLabels[s.priority]?.label || s.priority }}
               </span>
               <span class="suggestion-title">{{ s.title }}</span>
+              <button
+                v-if="s.detail"
+                class="btn-expand"
+                :class="{ expanded: expandedIds.has(s.id) }"
+                @click="toggleDetail(s.id)"
+              >
+                {{ expandedIds.has(s.id) ? '收起方案' : '查看方案' }}
+              </button>
               <span class="suggestion-time">{{ s.created_at?.slice(0, 10) }}</span>
             </div>
             <p class="suggestion-desc">{{ s.description }}</p>
+
+            <!-- Detail action plan (collapsible) -->
+            <div v-if="s.detail && expandedIds.has(s.id)" class="detail-panel">
+              <div class="detail-grid">
+                <div v-if="s.detail.action_channel" class="detail-item">
+                  <span class="detail-label">执行渠道</span>
+                  <span class="detail-value">{{ s.detail.action_channel }}</span>
+                </div>
+                <div v-if="s.detail.action_type" class="detail-item">
+                  <span class="detail-label">动作类型</span>
+                  <span class="detail-value">{{ s.detail.action_type }}</span>
+                </div>
+              </div>
+              <div v-if="s.detail.keywords?.length" class="detail-section">
+                <span class="detail-label">关键词</span>
+                <div class="keyword-list">
+                  <span v-for="kw in s.detail.keywords" :key="kw" class="keyword-tag">{{ kw }}</span>
+                </div>
+              </div>
+              <div v-if="s.detail.outline?.length" class="detail-section">
+                <span class="detail-label">内容大纲</span>
+                <ol class="outline-list">
+                  <li v-for="(item, i) in s.detail.outline" :key="i">{{ item }}</li>
+                </ol>
+              </div>
+              <div v-if="s.detail.timeline?.length" class="detail-section">
+                <span class="detail-label">执行时间线</span>
+                <div class="timeline-list">
+                  <div v-for="(t, i) in s.detail.timeline" :key="i" class="timeline-item">
+                    <span class="timeline-week">{{ t.week }}</span>
+                    <span class="timeline-task">{{ t.task }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="s.detail.competitor_ref" class="detail-section">
+                <span class="detail-label">竞品参考</span>
+                <p class="detail-text">{{ s.detail.competitor_ref }}</p>
+              </div>
+              <div v-if="s.detail.expected_outcome" class="detail-section">
+                <span class="detail-label">预期效果</span>
+                <p class="detail-text">{{ s.detail.expected_outcome }}</p>
+              </div>
+            </div>
+
             <div class="suggestion-actions">
               <button v-if="!s.is_resolved" class="btn-sm btn-resolve" @click="handleResolve(s)">
                 标记完成
@@ -351,6 +412,120 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.btn-expand {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-expand:hover, .btn-expand.expanded {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* --- Detail Panel --- */
+.detail-panel {
+  margin: 10px 0;
+  padding: 12px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.detail-section {
+  margin-top: 8px;
+}
+
+.detail-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 2px 0 0 0;
+  line-height: 1.5;
+}
+
+.keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.keyword-tag {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.outline-list {
+  margin: 2px 0 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.timeline-week {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 40px;
+}
+
+.timeline-task {
+  color: var(--text-secondary);
 }
 
 .btn-sm {

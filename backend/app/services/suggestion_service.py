@@ -1,9 +1,12 @@
 """AI-powered optimization suggestion service.
 
-Analyzes report data and uses LLM to generate actionable suggestions
-for improving brand visibility across AI platforms.
+Two-pass LLM generation:
+  Pass 1 — Generate 5-8 strategic suggestions from audit data.
+  Pass 2 — Expand each suggestion into a detailed action plan
+           (channel, outline, timeline, keywords, competitor reference).
 """
 
+import asyncio
 import json
 import logging
 
@@ -23,17 +26,28 @@ from app.models.models import (
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """你是一个AI搜索优化专家。根据品牌在各AI平台的可见性审计报告，生成具体可操作的优化建议。
+# ---------------------------------------------------------------------------
+# Pass 1 — strategic suggestions
+# ---------------------------------------------------------------------------
+
+_PASS1_SYSTEM = """你是一个AI搜索优化专家。根据品牌在各AI平台的可见性审计报告，生成具体可操作的优化建议。
+
+每条建议必须：
+1. 明确指出在哪个渠道/平台执行（如小红书、知乎、官网博客、微信公众号、B站、抖音）
+2. 指出针对哪个AI平台的优化目标（如Kimi、DeepSeek、通义千问）
+3. 给出具体动作（如"发布产品对比评测文章"、"优化官网FAQ页面添加结构化数据"）
 
 请以JSON数组格式返回建议，每条建议包含：
 - category: 分类（content_optimization/seo_strategy/platform_focus/competitive_strategy）
 - title: 建议标题（简短，20字内）
-- description: 详细说明（含具体行动步骤，100字内）
+- description: 详细说明（含具体行动步骤，200字内，必须包含执行渠道和目标AI平台）
 - priority: 优先级（high/medium/low）
+- target_platforms: 目标AI平台列表，如["kimi","deepseek"]
+- action_channel: 执行渠道，如"小红书"、"官网博客"、"知乎"
 
 只返回JSON数组，不要其他文字。"""
 
-_USER_PROMPT_TEMPLATE = """请分析以下品牌AI可见性报告并给出优化建议：
+_PASS1_USER = """请分析以下品牌AI可见性报告并给出优化建议：
 
 项目信息：{project_info}
 综合评分：{overall_score}/100
@@ -44,12 +58,46 @@ _USER_PROMPT_TEMPLATE = """请分析以下品牌AI可见性报告并给出优化
 
 竞品对比：{competitor_info}
 低分平台详情：{weak_platforms}
+{analysis_context}
 
-请生成5-8条优化建议，覆盖内容优化、SEO策略、平台重点、竞品策略等方面。"""
+请生成5-8条优化建议。每条建议必须明确：在哪个渠道做什么、优化哪个AI平台、使用什么关键词。"""
 
+# ---------------------------------------------------------------------------
+# Pass 2 — detailed action plan
+# ---------------------------------------------------------------------------
+
+_PASS2_SYSTEM = """你是一个AI搜索优化执行顾问。用户会给一条优化建议和相关的审计数据，请将其扩展为详细可执行的行动方案。
+
+请以JSON对象格式返回（不要数组），包含：
+- action_channel: 执行渠道（如小红书、知乎、官网博客）
+- action_type: 动作类型（如发布评测文章、优化FAQ页面、增加Schema标记、创建对比页面）
+- outline: 内容大纲，3-5个要点组成的数组
+- keywords: 建议使用的关键词列表，5-8个
+- timeline: 执行时间线，数组，每项包含 week（第几周）和 task（该周任务）
+- competitor_ref: 参考竞品的做法说明
+- expected_outcome: 预期效果
+
+只返回JSON对象，不要其他文字。"""
+
+_PASS2_USER = """优化建议：{title}
+建议详情：{description}
+目标AI平台：{target_platforms}
+执行渠道：{action_channel}
+
+审计背景：
+项目信息：{project_info}
+各平台评分：{platform_scores}
+竞品对比：{competitor_info}
+{analysis_context}
+
+请扩展为详细的行动方案。"""
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggestion]:
-    """Generate AI-powered suggestions based on a report."""
+    """Two-pass suggestion generation: strategy then detail."""
     project_id = report.project_id
 
     # Gather context
@@ -63,11 +111,14 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
     project_info = f"品牌: {', '.join(brand_names)}, 行业: 通用"
     platform_scores = json.dumps(report.platform_scores, ensure_ascii=False)
     competitor_info = f"竞品: {', '.join(competitors)}" if competitors else "无竞品数据"
-
-    # Get weak platform details
     weak_platforms = _get_weak_platforms(report.platform_scores)
 
-    user_prompt = _USER_PROMPT_TEMPLATE.format(
+    # Enrich with response analysis data
+    analysis_context = await _get_analysis_context(db, report.audit_id)
+    analysis_block = f"\n深度分析数据：\n{analysis_context}" if analysis_context else ""
+
+    # --- Pass 1: generate strategic suggestions ---
+    pass1_prompt = _PASS1_USER.format(
         project_info=project_info,
         overall_score=report.overall_score,
         mention_rate=report.mention_rate,
@@ -76,26 +127,32 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
         insights="; ".join(report.insights or []),
         competitor_info=competitor_info,
         weak_platforms=weak_platforms,
+        analysis_context=analysis_block,
     )
 
-    # Enrich with response analysis data if available
-    analysis_context = await _get_analysis_context(db, report.audit_id)
-    if analysis_context:
-        user_prompt += f"\n\n深度分析数据：\n{analysis_context}"
+    stubs = await _call_llm(pass1_prompt, system=_PASS1_SYSTEM)
+    if not stubs:
+        return []
 
-    # Call LLM
-    suggestions_json = await _call_llm(user_prompt)
+    # --- Pass 2: expand each suggestion into detail ---
+    suggestions: list[Suggestion] = []
+    for stub in stubs:
+        detail = await _expand_detail(
+            stub=stub,
+            project_info=project_info,
+            platform_scores=platform_scores,
+            competitor_info=competitor_info,
+            analysis_context=analysis_block,
+        )
 
-    # Parse and store
-    suggestions = []
-    for item in suggestions_json:
         s = Suggestion(
             project_id=project_id,
             report_id=report.id,
-            category=item.get("category", "content_optimization"),
-            title=item.get("title", ""),
-            description=item.get("description", ""),
-            priority=item.get("priority", "medium"),
+            category=stub.get("category", "content_optimization"),
+            title=stub.get("title", ""),
+            description=stub.get("description", ""),
+            priority=stub.get("priority", "medium"),
+            detail=detail,
         )
         db.add(s)
         suggestions.append(s)
@@ -107,6 +164,40 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
 
     return suggestions
 
+
+# ---------------------------------------------------------------------------
+# Pass 2 expansion
+# ---------------------------------------------------------------------------
+
+async def _expand_detail(
+    stub: dict,
+    project_info: str,
+    platform_scores: str,
+    competitor_info: str,
+    analysis_context: str,
+) -> dict | None:
+    """Call LLM to expand a single suggestion into a detailed action plan."""
+    prompt = _PASS2_USER.format(
+        title=stub.get("title", ""),
+        description=stub.get("description", ""),
+        target_platforms=", ".join(stub.get("target_platforms", [])),
+        action_channel=stub.get("action_channel", ""),
+        project_info=project_info,
+        platform_scores=platform_scores,
+        competitor_info=competitor_info,
+        analysis_context=analysis_context,
+    )
+    try:
+        result = await _call_llm(prompt, system=_PASS2_SYSTEM, expect_array=False)
+        return result if isinstance(result, dict) else None
+    except Exception as e:
+        logger.warning(f"Pass 2 expansion failed for suggestion '{stub.get('title')}': {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Context helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 async def _get_analysis_context(db: AsyncSession, audit_id: int) -> str:
     """Build analysis context string from ResponseAnalysis data."""
@@ -150,12 +241,16 @@ def _get_weak_platforms(platform_scores: dict) -> str:
     return ", ".join(weak)
 
 
-async def _call_llm(prompt: str) -> list[dict]:
+# ---------------------------------------------------------------------------
+# LLM call helper
+# ---------------------------------------------------------------------------
+
+async def _call_llm(prompt: str, *, system: str, expect_array: bool = True) -> list[dict] | dict | None:
     """Call the configured LLM and parse JSON response."""
     api_key, base_url, model = settings.get_llm_config()
     if not api_key:
         logger.warning("No LLM API key configured, returning empty suggestions")
-        return []
+        return [] if expect_array else None
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -165,7 +260,7 @@ async def _call_llm(prompt: str) -> list[dict]:
                 json={
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.7,
@@ -182,7 +277,8 @@ async def _call_llm(prompt: str) -> list[dict]:
                     text = text[:-3]
                 text = text.strip()
 
-            return json.loads(text)
+            parsed = json.loads(text)
+            return parsed
     except Exception as e:
         logger.error(f"LLM call failed for suggestions: {e}")
-        return []
+        return [] if expect_array else None

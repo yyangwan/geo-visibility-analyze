@@ -161,6 +161,7 @@ class SuggestionOut(BaseModel):
     description: str
     priority: str
     is_resolved: bool
+    detail: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
