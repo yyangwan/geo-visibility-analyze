@@ -21,5 +21,5 @@ Key routing rules:
 
 - **Progress**: `~/.gstack/projects/geo-visibility-analyze/progress.md`
 - **Plan**: `~/.gstack/projects/geo-visibility-analyze/implementation-plan-20260510.md`
-- **Phase**: Phase 3 DONE — Strategic Intelligence (120 tests pass)
-- **Next**: Phase 4 — Polish & Production Readiness (optional)
+- **Phase**: Phase 4 DONE — two-pass suggestion generation shipped
+- **Next**: Restart backend to apply migration, then generate new suggestions to test.

@@ -1,7 +1,7 @@
 """Fix charset to utf8mb4 for Phase 1 tables.
 
 Revision ID: fix_charset_utf8mb4
-Revises: add_response_analyses_add_response_analyses
+Revises: add_response_analyses
 Create Date: 2026-05-11
 """
 
@@ -9,7 +9,7 @@ from alembic import op
 
 # revision identifiers
 revision = 'fix_charset_utf8mb4'
-down_revision = 'add_response_analyses_add_response_analyses'
+down_revision = 'add_response_analyses'
 branch_labels = None
 depends_on = None
 

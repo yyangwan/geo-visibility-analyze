@@ -135,6 +135,16 @@ async def get_content_intelligence(
     if not audit:
         return ContentIntelligenceOut()
 
+    # Auto-trigger analysis if there are pending records
+    pending_count = await db.execute(
+        select(ResponseAnalysis)
+        .join(PlatformResponseRecord, ResponseAnalysis.response_record_id == PlatformResponseRecord.id)
+        .where(PlatformResponseRecord.audit_id == audit.id)
+        .where(ResponseAnalysis.status.in_(["pending", "failed"]))
+    )
+    if pending_count.scalars().first():
+        asyncio.create_task(run_analysis_for_audit(audit.id))
+
     # Load all PRRs for this audit
     prr_result = await db.execute(
         select(PlatformResponseRecord)

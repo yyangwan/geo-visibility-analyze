@@ -111,12 +111,13 @@ async def run_analysis_for_audit(audit_id: int) -> None:
             pending=len(pending_analyses),
         )
 
-        # Run analyses with concurrency limit
+        # Run analyses with concurrency limit (each gets its own DB session)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_ANALYSIS)
 
         async def _analyze_with_semaphore(ra: ResponseAnalysis):
             async with semaphore:
-                await _analyze_single(db, ra, brand_names, competitor_names)
+                async with async_session() as task_db:
+                    await _analyze_single(task_db, ra, brand_names, competitor_names)
 
         tasks = [_analyze_with_semaphore(ra) for ra in pending_analyses]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -155,7 +156,8 @@ async def retry_failed_analyses(audit_id: int) -> int:
 
         async def _analyze_with_semaphore(ra: ResponseAnalysis):
             async with semaphore:
-                await _analyze_single(db, ra, brand_names, competitor_names)
+                async with async_session() as task_db:
+                    await _analyze_single(task_db, ra, brand_names, competitor_names)
 
         tasks = [_analyze_with_semaphore(ra) for ra in failed]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -170,6 +172,11 @@ async def _analyze_single(
     competitor_names: list[str],
 ) -> None:
     """Analyze a single ResponseAnalysis record."""
+    # Re-fetch within this session to avoid cross-session object issues
+    ra = await db.get(ResponseAnalysis, ra.id)
+    if not ra:
+        return
+
     ra.status = "running"
     await db.commit()
 
@@ -235,7 +242,7 @@ async def _call_llm_for_analysis(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, proxy=None) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},

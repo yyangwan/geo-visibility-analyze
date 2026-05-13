@@ -53,8 +53,11 @@ app.include_router(strategic_router, prefix="/api/strategic", tags=["strategic"]
 async def startup():
     logger.info("starting_app")
     _run_upgrade_sync()
+    logger.info("upgrade_done")
     from app.services.scheduler import start_scheduler
+    logger.info("scheduler_imported")
     start_scheduler()
+    logger.info("scheduler_started")
 
 
 @app.on_event("shutdown")
@@ -68,12 +71,28 @@ def _run_upgrade_sync():
     """Run Alembic upgrade synchronously."""
     from alembic import command
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from alembic.migration import MigrationContext
+    from sqlalchemy import create_engine
 
     db_url = settings.database_url.replace("+aiomysql", "+pymysql")
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("script_location", "alembic")
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-    command.upgrade(alembic_cfg, "head")
+
+    # Check if already at head — skip upgrade if so
+    script = ScriptDirectory.from_config(alembic_cfg)
+    head = script.get_current_head()
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        current = ctx.get_current_revision()
+    engine.dispose()
+
+    if current != head:
+        command.upgrade(alembic_cfg, "head")
+    else:
+        logger.info("db_already_at_head", current=current)
 
 
 @app.get("/api/health")

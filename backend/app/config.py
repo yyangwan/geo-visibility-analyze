@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Query settings
     query_timeout_seconds: int = 60
-    max_concurrent_per_platform: int = 5
+    max_concurrent_per_platform: int = 2
 
     # Analysis settings
     analysis_timeout_seconds: int = 120

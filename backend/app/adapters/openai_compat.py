@@ -56,16 +56,25 @@ class OpenAICompatAdapter(PlatformAdapter):
         """Extract structured citations from API response. Subclasses override."""
         return []
 
+    # Max retries on rate-limit (429) responses
+    _rate_limit_retries: int = 3
+
     async def _query_single(self, prompt: str) -> PlatformResponse:
         async with self.semaphore:
             start = time.monotonic()
             try:
                 client = await self._get_client()
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json=self._build_request_body(prompt),
-                )
+
+                # Retry loop for rate-limiting
+                for attempt in range(self._rate_limit_retries + 1):
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json=self._build_request_body(prompt),
+                    )
+                    if resp.status_code != 429 or attempt == self._rate_limit_retries:
+                        break
+                    await asyncio.sleep(2 ** attempt)
 
                 latency = int((time.monotonic() - start) * 1000)
 

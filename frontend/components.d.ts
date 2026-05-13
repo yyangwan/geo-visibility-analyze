@@ -13,8 +13,6 @@ declare module 'vue' {
   export interface GlobalComponents {
     AuditProgressCard: typeof import('./src/components/common/AuditProgressCard.vue')['default']
     CompetitorTable: typeof import('./src/components/dashboard/CompetitorTable.vue')['default']
-    ElOption: typeof import('element-plus/es')['ElOption']
-    ElSelect: typeof import('element-plus/es')['ElSelect']
     EmptyState: typeof import('./src/components/common/EmptyState.vue')['default']
     ErrorState: typeof import('./src/components/common/ErrorState.vue')['default']
     LoadingSkeleton: typeof import('./src/components/common/LoadingSkeleton.vue')['default']

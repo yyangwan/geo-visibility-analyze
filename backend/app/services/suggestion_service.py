@@ -135,6 +135,7 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
         return []
 
     # --- Pass 2: expand each suggestion into detail ---
+    logger.info(f"Pass 1 generated {len(stubs)} stubs, expanding each...")
     suggestions: list[Suggestion] = []
     for stub in stubs:
         detail = await _expand_detail(
@@ -142,8 +143,9 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
             project_info=project_info,
             platform_scores=platform_scores,
             competitor_info=competitor_info,
-            analysis_context=analysis_block,
+            analysis_context=analysis_context,
         )
+        logger.info(f"Pass 2 for '{stub.get('title', '?')[:20]}': detail={'found' if detail else 'None'}")
 
         s = Suggestion(
             project_id=project_id,
@@ -177,21 +179,30 @@ async def _expand_detail(
     analysis_context: str,
 ) -> dict | None:
     """Call LLM to expand a single suggestion into a detailed action plan."""
+    tp = stub.get("target_platforms") or []
+    if not isinstance(tp, list):
+        tp = [str(tp)]
     prompt = _PASS2_USER.format(
         title=stub.get("title", ""),
         description=stub.get("description", ""),
-        target_platforms=", ".join(stub.get("target_platforms", [])),
+        target_platforms=", ".join(tp),
         action_channel=stub.get("action_channel", ""),
         project_info=project_info,
         platform_scores=platform_scores,
         competitor_info=competitor_info,
         analysis_context=analysis_context,
     )
+    logger.info(f"Pass 2 calling LLM for '{stub.get('title', '?')[:30]}'...")
     try:
         result = await _call_llm(prompt, system=_PASS2_SYSTEM, expect_array=False)
-        return result if isinstance(result, dict) else None
+        if isinstance(result, dict):
+            logger.info(f"Pass 2 SUCCESS for '{stub.get('title', '?')[:30]}'")
+            return result
+        logger.warning(f"Pass 2 returned non-dict for '{stub.get('title')}': {type(result)}")
+        return None
     except Exception as e:
         logger.warning(f"Pass 2 expansion failed for suggestion '{stub.get('title')}': {e}")
+        return None
         return None
 
 
@@ -253,7 +264,7 @@ async def _call_llm(prompt: str, *, system: str, expect_array: bool = True) -> l
         return [] if expect_array else None
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, proxy=None) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},

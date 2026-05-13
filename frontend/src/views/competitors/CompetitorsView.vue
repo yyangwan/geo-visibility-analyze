@@ -305,6 +305,12 @@ onMounted(async () => {
             </label>
           </div>
         </div>
+        <div class="legend-bar">
+          <span class="legend-item"><span class="tag tag-good">✓</span> 被提及</span>
+          <span class="legend-item"><span class="rank-badge">#N</span> 推荐排名</span>
+          <span class="legend-item"><span class="conf-text">N%</span> 情感置信度</span>
+          <span class="legend-item"><span class="text-muted">-</span> 未提及</span>
+        </div>
         <div class="table-scroll">
           <table class="detail-table pivot-table">
             <thead>
@@ -485,6 +491,25 @@ onMounted(async () => {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 10px;
+}
+
+/* --- Legend --- */
+.legend-bar {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* --- Table --- */

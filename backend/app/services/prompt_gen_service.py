@@ -58,7 +58,7 @@ async def _call_llm(system_prompt: str, user_prompt: str) -> list[dict]:
         return []
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, proxy=None) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
