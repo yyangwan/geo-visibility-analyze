@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useProjectStore } from '../../stores/project'
+import { formatDate } from '../../utils/date'
 import {
   getSuggestions,
   generateSuggestions,
@@ -195,7 +196,7 @@ onMounted(async () => {
               >
                 {{ expandedIds.has(s.id) ? '收起方案' : '查看方案' }}
               </button>
-              <span class="suggestion-time">{{ s.created_at?.slice(0, 10) }}</span>
+              <span class="suggestion-time">{{ formatDate(s.created_at) }}</span>
             </div>
             <p class="suggestion-desc">{{ s.description }}</p>
 

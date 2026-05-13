@@ -12,6 +12,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useProjectStore } from '../../stores/project'
+import { formatDateTime, formatTimeOnly } from '../../utils/date'
 import { PLATFORM_LABELS } from '../../constants/platforms'
 import { ElMessage } from 'element-plus'
 import {
@@ -419,9 +420,9 @@ onMounted(async () => {
                   {{ audit.platforms_json?.map(p => platformLabels[p] || p).join(', ') || '-' }}
                 </div>
                 <div class="audit-time">
-                  {{ audit.created_at?.slice(0, 16).replace('T', ' ') }}
+                  {{ formatDateTime(audit.created_at) }}
                   <span v-if="audit.completed_at">
-                    → {{ audit.completed_at?.slice(11, 16) }}
+                    → {{ formatTimeOnly(audit.completed_at) }}
                   </span>
                 </div>
               </div>

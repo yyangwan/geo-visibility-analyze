@@ -13,6 +13,7 @@ import {
 } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useProjectStore } from '../../stores/project'
+import { formatDateTime } from '../../utils/date'
 import { PLATFORM_LABELS } from '../../constants/platforms'
 import { ElMessage } from 'element-plus'
 import {
@@ -540,7 +541,7 @@ const structureTypeLabels: Record<string, string> = {
               />
               <span class="audit-check-label">
                 审计 #{{ audit.id }}
-                <span class="audit-check-date">{{ audit.created_at?.slice(0, 16).replace('T', ' ') }}</span>
+                <span class="audit-check-date">{{ formatDateTime(audit.created_at) }}</span>
               </span>
             </label>
             <div v-if="completedAudits.length === 0" class="no-audits">暂无已完成的审计</div>

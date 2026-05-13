@@ -13,6 +13,8 @@ import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy import select, text
+
+from app.utils.timezone import utcnow
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import PlatformResponse
@@ -53,7 +55,7 @@ async def run_audit(audit_id: int) -> None:
         except Exception as e:
             audit.status = QueryStatus.FAILED
             audit.error_message = str(e)
-            audit.completed_at = datetime.now(timezone.utc)
+            audit.completed_at = utcnow()
             await db.commit()
             publish(audit_id, PlatformEvent(type="audit_failed", error=str(e)))
             logger.error("audit_failed", audit_id=audit_id, error=str(e))
@@ -73,7 +75,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     if not prompts:
         audit.status = QueryStatus.FAILED
         audit.error_message = "No prompts found for this project"
-        audit.completed_at = datetime.now(timezone.utc)
+        audit.completed_at = utcnow()
         await db.commit()
         return
 
@@ -85,7 +87,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     if not brands:
         audit.status = QueryStatus.FAILED
         audit.error_message = "No brands found for this project"
-        audit.completed_at = datetime.now(timezone.utc)
+        audit.completed_at = utcnow()
         await db.commit()
         return
 
@@ -246,7 +248,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     else:
         audit.status = QueryStatus.COMPLETED
 
-    audit.completed_at = datetime.now(timezone.utc)
+    audit.completed_at = utcnow()
     await db.commit()
     publish(audit.id, PlatformEvent(type="audit_done"))
     logger.info(

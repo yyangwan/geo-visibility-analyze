@@ -13,6 +13,7 @@ import {
 } from '../../api/client'
 import type { TrendPoint } from '../../api/client'
 import { PLATFORM_LABELS } from '../../constants/platforms'
+import { formatDateTime } from '../../utils/date'
 import LoadingSkeleton from '../../components/common/LoadingSkeleton.vue'
 import ErrorState from '../../components/common/ErrorState.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
@@ -28,6 +29,7 @@ const activeAuditId = ref<number | null>(null)
 const loading = ref(true)
 const error = ref('')
 const showOnboarding = ref(false)
+const onboardingSkipped = ref(false)
 const previousScore = ref<number | null>(null)
 const previousMention = ref<number | null>(null)
 const nextScheduleTime = ref<string | null>(null)
@@ -147,8 +149,8 @@ function onAuditError(msg: string) {
 
 function onOnboardingDone() {
   showOnboarding.value = false
-  loading.value = true
-  onMounted()
+  onboardingSkipped.value = true
+  loadData()
 }
 
 async function loadPreviousData() {
@@ -178,12 +180,12 @@ async function loadScheduleInfo() {
   } catch { /* non-critical */ }
 }
 
-onMounted(async () => {
+async function loadData() {
   loading.value = true
   error.value = ''
   try {
     await store.fetchProjects()
-    if (!store.projects.length) {
+    if (!store.projects.length && !onboardingSkipped.value) {
       showOnboarding.value = true
     } else if (store.currentProject) {
       try {
@@ -198,7 +200,9 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(loadData)
 
 async function retryLoad() {
   loading.value = true
@@ -240,6 +244,8 @@ async function retryLoad() {
             <span v-if="hasData" class="freshness">
               <span class="dot-green"></span>
               基于 {{ store.prompts.length }} 条 Prompt · {{ store.report?.platform_scores ? Object.keys(store.report.platform_scores).length : 0 }} 个平台
+              <span class="meta-divider">|</span>
+              审计时间 {{ formatDateTime(report?.created_at) }}
             </span>
             <span v-else class="text-muted">暂无数据，请新建审计</span>
             <template v-if="hasData">

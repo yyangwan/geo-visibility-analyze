@@ -1,7 +1,7 @@
 """PDF report export endpoint."""
 
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -107,7 +107,7 @@ async def export_pdf(
     template = _env.get_template("report.html")
     html = template.render(
         project_name=project.name if project else "Unknown",
-        report_date=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        report_date=datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
         overall_score=report.overall_score,
         mention_rate=f"{report.mention_rate:.1%}",
         competitor_rank=f"第{report.competitor_rank}名" if report.competitor_rank else "-",

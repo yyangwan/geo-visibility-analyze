@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from app.utils.timezone import utcnow
+
 from sqlalchemy import select
 
 from app.database import async_session
@@ -119,7 +121,7 @@ async def _execute_scheduled_job(job: ScheduledJob, db) -> None:
         platforms_json=job.platforms_json or [],
     )
     db.add(audit)
-    job.last_run_at = datetime.now(timezone.utc)
+    job.last_run_at = utcnow()
     await db.commit()
     await db.refresh(audit)
 

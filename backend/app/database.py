@@ -8,7 +8,7 @@ engine = create_async_engine(
     echo=False,
     pool_recycle=3600,
     pool_pre_ping=True,
-    connect_args={"charset": "utf8mb4"},
+    connect_args={"charset": "utf8mb4", "init_command": "SET time_zone = '+00:00'"},
 )
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
