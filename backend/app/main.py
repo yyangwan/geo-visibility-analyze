@@ -10,6 +10,7 @@ from app.api.platforms import router as platforms_router
 from app.api.projects import router as projects_router
 from app.api.reports import router as reports_router
 from app.api.schedules import router as schedules_router
+from app.api.integration import router as integration_router
 from app.api.strategic import router as strategic_router
 from app.api.suggestions import router as suggestions_router
 from app.api.trends import router as trends_router
@@ -47,6 +48,7 @@ app.include_router(trends_router, prefix="/api/trends", tags=["trends"])
 app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 app.include_router(suggestions_router, prefix="/api/suggestions", tags=["suggestions"])
 app.include_router(strategic_router, prefix="/api/strategic", tags=["strategic"])
+app.include_router(integration_router, prefix="/api/integration", tags=["integration"])
 
 
 @app.on_event("startup")
