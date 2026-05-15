@@ -1,8 +1,11 @@
-"""Auth API — register, login, current user."""
+"""Auth API — GeniLink SSO + local auth (migration period)."""
 
+import os
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +19,10 @@ from app.services.auth_service import (
     hash_password,
     verify_password,
 )
+from app.services.genilink_auth import (
+    get_or_create_user_from_genilink,
+    verify_genilink_token,
+)
 
 router = APIRouter()
 
@@ -26,7 +33,16 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Dependency that extracts and validates the current user from JWT."""
+    """Dependency that extracts and validates the current user from JWT.
+
+    Supports both GeniLink RS256 JWTs and legacy HS256 local tokens.
+    """
+    # Try GeniLink RS256 JWT first
+    claims = await verify_genilink_token(token)
+    if claims:
+        return await get_or_create_user_from_genilink(claims, db)
+
+    # Fallback: legacy local HS256 token
     payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(
@@ -110,3 +126,52 @@ async def login(
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user info."""
     return current_user
+
+
+@router.get("/sso/callback")
+async def sso_callback(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Exchange GeniLink authorization code for a local JWT.
+
+    Called by the frontend SSO callback view.
+    """
+    genilink_url = os.getenv("GENILINK_URL", "https://genilink.cn")
+    client_secret = os.getenv("GENILINK_CLIENT_SECRET")
+
+    if not client_secret:
+        raise HTTPException(status_code=500, detail="SSO not configured")
+
+    frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    redirect_uri = f"{frontend_origin}/sso/callback"
+
+    # Exchange code for GeniLink RS256 JWT
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{genilink_url}/api/auth/sso/token",
+            json={
+                "code": code,
+                "service": "visibility",
+                "redirect_uri": redirect_uri,
+                "client_secret": client_secret,
+            },
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="Code exchange failed")
+        data = resp.json()
+
+    genilink_token = data["access_token"]
+
+    # Verify the GeniLink JWT
+    claims = await verify_genilink_token(genilink_token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Invalid GeniLink token")
+
+    # Auto-provision user
+    user = await get_or_create_user_from_genilink(claims, db)
+
+    # Issue a local HS256 JWT for the frontend
+    local_token = create_access_token(data={"sub": str(user.id)})
+
+    return {"access_token": local_token, "token_type": "bearer"}

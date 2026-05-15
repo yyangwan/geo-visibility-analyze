@@ -10,6 +10,12 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/sso/callback',
+      name: 'sso-callback',
+      component: () => import('../views/auth/SSOCallbackView.vue'),
+      meta: { public: true },
+    },
+    {
       path: '/',
       redirect: '/dashboard',
     },
@@ -60,7 +66,13 @@ router.beforeEach((to) => {
   if (to.meta.public) return true
   const token = localStorage.getItem('token')
   if (!token) {
-    return { name: 'login' }
+    // Redirect to GeniLink SSO
+    const genilinkUrl = import.meta.env.VITE_GENILINK_URL || 'https://genilink.cn'
+    const ssoUrl = new URL(`${genilinkUrl}/api/auth/sso`)
+    ssoUrl.searchParams.set('service', 'visibility')
+    ssoUrl.searchParams.set('redirect_uri', `${window.location.origin}/sso/callback`)
+    window.location.href = ssoUrl.toString()
+    return false
   }
   return true
 })
