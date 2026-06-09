@@ -96,7 +96,7 @@ async function handleNext() {
     if (!projectId.value) return
     generating.value = true
     try {
-      await generatePrompts(projectId.value, 10)
+      await generatePrompts(projectId.value, 10, store.currentProject?.product_category || productCategory.value.trim())
       await store.fetchPrompts(projectId.value)
     } catch (e: any) {
       ElMessage.error(e?.response?.data?.detail || '生成 Prompt 失败')

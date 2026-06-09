@@ -11,10 +11,12 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "mysql+aiomysql://aiscope:aiscope@localhost:3306/aiscope"
 
-    # DeepSeek API
+    # DeepSeek — hosted on DashScope (Bailian) for web search support
+    # Use DashScope API key, not DeepSeek official key
+    # Models: deepseek-v3, deepseek-v3.1, deepseek-r1, deepseek-v4-pro
     deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    deepseek_model: str = "deepseek-v3"
 
     # Qwen (Tongyi) API
     qwen_api_key: str = ""
@@ -24,7 +26,7 @@ class Settings(BaseSettings):
     # Doubao (Volcengine/ByteDance) API
     doubao_api_key: str = ""
     doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    doubao_model: str = "doubao-1-5-pro-32k-250115"
+    doubao_model: str = "ep-20260531082219-dkkgl"
 
     # Kimi (Moonshot) API
     kimi_api_key: str = ""

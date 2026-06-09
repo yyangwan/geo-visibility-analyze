@@ -1,0 +1,20 @@
+{
+  "name": "hyperframes-local",
+  "interface": {
+    "displayName": "HyperFrames Local"
+  },
+  "plugins": [
+    {
+      "name": "hyperframes",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hyperframes"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Design"
+    }
+  ]
+}

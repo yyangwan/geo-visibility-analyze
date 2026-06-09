@@ -52,7 +52,7 @@ def upgrade() -> None:
     op.create_table(
         'source_citations',
         sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('project_id', sa.Integer(), sa.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False),
+        sa.Column('project_id', sa.String(50), nullable=False),
         sa.Column('audit_id', sa.Integer(), sa.ForeignKey('audits.id', ondelete='SET NULL'), nullable=True),
         sa.Column('domain', sa.String(200), nullable=False),
         sa.Column('urls', sa.JSON(), nullable=True),

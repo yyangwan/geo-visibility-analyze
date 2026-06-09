@@ -18,11 +18,11 @@ from app.database import async_session
 from app.logging_config import get_logger
 from app.models.models import (
     Audit,
-    Brand,
     PlatformResponseRecord,
     Prompt,
     ResponseAnalysis,
 )
+from app.services.audit_service import BrandData
 
 logger = get_logger("analysis")
 
@@ -73,11 +73,16 @@ async def run_analysis_for_audit(audit_id: int) -> None:
             logger.info("analysis_no_prrs", audit_id=audit_id)
             return
 
-        # Load brands
-        brand_result = await db.execute(
-            select(Brand).where(Brand.project_id == audit.project_id)
-        )
-        brands = brand_result.scalars().all()
+        # Load brands from audit snapshot
+        brands = [
+            BrandData(
+                id=b.get("id", ""),
+                name=b.get("name", ""),
+                aliases=b.get("aliases", []),
+                is_competitor=b.get("is_competitor", False),
+            )
+            for b in (audit.brands_json or [])
+        ]
         brand_names = [b.name for b in brands if not b.is_competitor]
         competitor_names = [b.name for b in brands if b.is_competitor]
 
@@ -139,12 +144,17 @@ async def retry_failed_analyses(audit_id: int) -> int:
         if not failed:
             return 0
 
-        # Load brands
+        # Load brands from audit snapshot
         audit = await db.get(Audit, audit_id)
-        brand_result = await db.execute(
-            select(Brand).where(Brand.project_id == audit.project_id)
-        )
-        brands = brand_result.scalars().all()
+        brands = [
+            BrandData(
+                id=b.get("id", ""),
+                name=b.get("name", ""),
+                aliases=b.get("aliases", []),
+                is_competitor=b.get("is_competitor", False),
+            )
+            for b in (audit.brands_json or [])
+        ]
         brand_names = [b.name for b in brands if not b.is_competitor]
         competitor_names = [b.name for b in brands if b.is_competitor]
 

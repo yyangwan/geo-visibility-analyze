@@ -11,7 +11,7 @@ Aggregates audit results into a comprehensive report with:
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Brand, QueryResult, Report
+from app.models.models import QueryResult, Report
 
 
 async def generate_report(db: AsyncSession, audit) -> Report:
@@ -25,12 +25,9 @@ async def generate_report(db: AsyncSession, audit) -> Report:
     )
     results = result.scalars().all()
 
-    # Load brands for this project
-    brand_result = await db.execute(
-        select(Brand).where(Brand.project_id == project_id)
-    )
-    brands = brand_result.scalars().all()
-    brand_map = {b.id: b for b in brands}
+    # Load brands from audit snapshot (brands_json column)
+    brands = audit.brands_json or []
+    brand_map = {b["id"]: b for b in brands}
 
     # Basic counts
     total_queries = len(results)
@@ -49,12 +46,13 @@ async def generate_report(db: AsyncSession, audit) -> Report:
         return report
 
     # Per-brand mention rates (avoids dilution from competitor count)
-    brand_mention_rates: dict[int, float] = {}
+    brand_mention_rates: dict[str, float] = {}
     for brand in brands:
-        brand_results = [r for r in results if r.brand_id == brand.id]
+        brand_id = brand["id"]
+        brand_results = [r for r in results if r.brand_id == brand_id]
         if brand_results:
             rate = sum(1 for r in brand_results if r.mention_found) / len(brand_results)
-            brand_mention_rates[brand.id] = rate
+            brand_mention_rates[brand_id] = rate
     mention_rate = (
         sum(brand_mention_rates.values()) / len(brand_mention_rates)
         if brand_mention_rates
@@ -62,12 +60,13 @@ async def generate_report(db: AsyncSession, audit) -> Report:
     )
 
     # Per-brand recommendation rates
-    brand_recommend_rates: dict[int, float] = {}
+    brand_recommend_rates: dict[str, float] = {}
     for brand in brands:
-        brand_results = [r for r in results if r.brand_id == brand.id]
+        brand_id = brand["id"]
+        brand_results = [r for r in results if r.brand_id == brand_id]
         if brand_results:
             rate = sum(1 for r in brand_results if r.is_recommended) / len(brand_results)
-            brand_recommend_rates[brand.id] = rate
+            brand_recommend_rates[brand_id] = rate
     recommend_rate = (
         sum(brand_recommend_rates.values()) / len(brand_recommend_rates)
         if brand_recommend_rates
@@ -136,10 +135,10 @@ async def generate_report(db: AsyncSession, audit) -> Report:
 
 
 def _compute_competitor_rank(
-    results: list[QueryResult], brand_map: dict[int, Brand]
+    results: list[QueryResult], brand_map: dict[str, dict]
 ) -> int | None:
     """Compute the primary brand's rank vs competitors."""
-    brand_mentions: dict[int, int] = {}
+    brand_mentions: dict[str, int] = {}
     for r in results:
         if r.mention_found:
             brand_mentions[r.brand_id] = brand_mentions.get(r.brand_id, 0) + 1
@@ -151,7 +150,7 @@ def _compute_competitor_rank(
 
     for rank, (brand_id, _) in enumerate(sorted_brands, 1):
         brand = brand_map.get(brand_id)
-        if brand and not brand.is_competitor:
+        if brand and not brand.get("is_competitor", False):
             return rank
 
     return None
@@ -162,8 +161,8 @@ def _generate_insights(
     mention_rate: float,
     recommend_rate: float,
     platform_scores: dict[str, float],
-    brands: list[Brand],
-    brand_map: dict[int, Brand],
+    brands: list[dict],
+    brand_map: dict[str, dict],
     results: list[QueryResult],
 ) -> list[str]:
     """Generate actionable insights from the audit data."""
@@ -191,9 +190,9 @@ def _generate_insights(
     competitor_mentions = 0
     for r in results:
         brand = brand_map.get(r.brand_id)
-        if brand and not brand.is_competitor and r.mention_found:
+        if brand and not brand.get("is_competitor", False) and r.mention_found:
             primary_mentions += 1
-        elif brand and brand.is_competitor and r.mention_found:
+        elif brand and brand.get("is_competitor", False) and r.mention_found:
             competitor_mentions += 1
 
     if competitor_mentions > 0:

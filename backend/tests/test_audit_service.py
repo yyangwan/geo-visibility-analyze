@@ -1,32 +1,39 @@
-"""Tests for audit service — PlatformResponseRecord creation and source citation upsert."""
+"""Tests for audit service - PRR creation and source citation upsert."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.models.models import (
-    Audit,
-    Brand,
-    PlatformResponseRecord,
-    Project,
-    Prompt,
-    QueryResult,
-    QueryStatus,
-    SourceCitation,
-)
-from app.adapters.base import ErrorCode, PlatformResponse
+import pytest
+
+from app.adapters.base import PlatformResponse
+from app.models.models import Audit, PlatformResponseRecord, Prompt, QueryResult, QueryStatus, SourceCitation
+from app.services import audit_service
 from app.services.source_extraction import ExtractedSource
 
 
-class TestPlatformResponseRecord:
-    """Tests for PRR model creation and relationships."""
+async def _create_prompt(db, project_id: str, text: str):
+    prompt = Prompt(project_id=project_id, text=text)
+    db.add(prompt)
+    await db.flush()
+    return prompt
 
+
+async def _create_audit(db, project_id: str):
+    audit = Audit(project_id=project_id, status=QueryStatus.PENDING, brands_json=[{"id": "brand-1", "name": "测试品牌", "aliases": ["测试"], "is_competitor": False}])
+    db.add(audit)
+    await db.flush()
+    return audit
+
+
+async def _create_brand_id(_: object, brand_id: str = "brand-1") -> str:
+    return brand_id
+
+
+class TestPlatformResponseRecord:
     @pytest.mark.asyncio
     async def test_create_prr(self, db_session):
-        """PRR can be created with all fields."""
-        user = await _create_user(db_session, "testuser")
-        project = await _create_project(db_session, user.id, "Test Project")
-        prompt = await _create_prompt(db_session, project.id, "推荐保险")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-1"
+        prompt = await _create_prompt(db_session, project_id, "推荐保险")
+        audit = await _create_audit(db_session, project_id)
 
         prr = PlatformResponseRecord(
             audit_id=audit.id,
@@ -50,47 +57,51 @@ class TestPlatformResponseRecord:
 
     @pytest.mark.asyncio
     async def test_prr_unique_constraint(self, db_session):
-        """Unique constraint on (audit_id, prompt_id, platform) prevents duplicates."""
-        user = await _create_user(db_session, "testuser2")
-        project = await _create_project(db_session, user.id, "Test")
-        prompt = await _create_prompt(db_session, project.id, "推荐保险")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-2"
+        prompt = await _create_prompt(db_session, project_id, "推荐保险")
+        audit = await _create_audit(db_session, project_id)
 
         prr1 = PlatformResponseRecord(
-            audit_id=audit.id, prompt_id=prompt.id,
-            platform="deepseek", response_text="回复1",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            platform="deepseek",
+            response_text="回复1",
         )
         db_session.add(prr1)
         await db_session.flush()
 
         prr2 = PlatformResponseRecord(
-            audit_id=audit.id, prompt_id=prompt.id,
-            platform="deepseek", response_text="回复2",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            platform="deepseek",
+            response_text="回复2",
         )
         db_session.add(prr2)
 
-        with pytest.raises(Exception):  # IntegrityError
+        with pytest.raises(Exception):
             await db_session.flush()
 
     @pytest.mark.asyncio
     async def test_qr_references_prr(self, db_session):
-        """QueryResult can reference a PlatformResponseRecord."""
-        user = await _create_user(db_session, "testuser3")
-        project = await _create_project(db_session, user.id, "Test")
-        brand = await _create_brand(db_session, project.id, "平安保险")
-        prompt = await _create_prompt(db_session, project.id, "推荐保险")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-3"
+        prompt = await _create_prompt(db_session, project_id, "推荐保险")
+        audit = await _create_audit(db_session, project_id)
 
         prr = PlatformResponseRecord(
-            audit_id=audit.id, prompt_id=prompt.id,
-            platform="deepseek", response_text="AI回复内容",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            platform="deepseek",
+            response_text="AI回复内容",
         )
         db_session.add(prr)
         await db_session.flush()
 
         qr = QueryResult(
-            audit_id=audit.id, prompt_id=prompt.id, brand_id=brand.id,
-            platform="deepseek", response_text="AI回复内容",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            brand_id="brand-1",
+            platform="deepseek",
+            response_text="AI回复内容",
             response_record_id=prr.id,
         )
         db_session.add(qr)
@@ -100,45 +111,45 @@ class TestPlatformResponseRecord:
 
     @pytest.mark.asyncio
     async def test_qr_text_property_with_prr(self, db_session):
-        """QR.text property falls back to PRR when available."""
-        user = await _create_user(db_session, "testuser4")
-        project = await _create_project(db_session, user.id, "Test")
-        brand = await _create_brand(db_session, project.id, "品牌")
-        prompt = await _create_prompt(db_session, project.id, "推荐保险")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-4"
+        prompt = await _create_prompt(db_session, project_id, "推荐保险")
+        audit = await _create_audit(db_session, project_id)
 
         prr = PlatformResponseRecord(
-            audit_id=audit.id, prompt_id=prompt.id,
-            platform="deepseek", response_text="PRR的回复内容",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            platform="deepseek",
+            response_text="PRR的回复内容",
         )
         db_session.add(prr)
         await db_session.flush()
 
         qr = QueryResult(
-            audit_id=audit.id, prompt_id=prompt.id, brand_id=brand.id,
-            platform="deepseek", response_text="QR的旧内容",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            brand_id="brand-1",
+            platform="deepseek",
+            response_text="QR的旧内容",
             response_record_id=prr.id,
         )
         db_session.add(qr)
         await db_session.flush()
 
-        # Refresh to load relationship
         await db_session.refresh(qr)
-        # text property should prefer PRR
         assert qr.text == "PRR的回复内容"
 
     @pytest.mark.asyncio
     async def test_qr_text_property_without_prr(self, db_session):
-        """QR.text property falls back to response_text when no PRR."""
-        user = await _create_user(db_session, "testuser5")
-        project = await _create_project(db_session, user.id, "Test")
-        brand = await _create_brand(db_session, project.id, "品牌")
-        prompt = await _create_prompt(db_session, project.id, "推荐保险")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-5"
+        prompt = await _create_prompt(db_session, project_id, "推荐保险")
+        audit = await _create_audit(db_session, project_id)
 
         qr = QueryResult(
-            audit_id=audit.id, prompt_id=prompt.id, brand_id=brand.id,
-            platform="deepseek", response_text="旧数据",
+            audit_id=audit.id,
+            prompt_id=prompt.id,
+            brand_id="brand-1",
+            platform="deepseek",
+            response_text="旧数据",
         )
         db_session.add(qr)
         await db_session.flush()
@@ -148,18 +159,17 @@ class TestPlatformResponseRecord:
 
 
 class TestSourceCitation:
-    """Tests for SourceCitation model."""
-
     @pytest.mark.asyncio
     async def test_create_citation(self, db_session):
-        """SourceCitation can be created."""
-        user = await _create_user(db_session, "sc_user")
-        project = await _create_project(db_session, user.id, "Test")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-6"
+        audit = await _create_audit(db_session, project_id)
 
         sc = SourceCitation(
-            project_id=project.id, audit_id=audit.id,
-            domain="zhihu.com", citation_count=3, platform="deepseek",
+            project_id=project_id,
+            audit_id=audit.id,
+            domain="zhihu.com",
+            citation_count=3,
+            platform="deepseek",
         )
         db_session.add(sc)
         await db_session.flush()
@@ -169,65 +179,100 @@ class TestSourceCitation:
 
     @pytest.mark.asyncio
     async def test_audit_id_set_null_on_delete(self, db_session):
-        """When audit is deleted, SourceCitation.audit_id becomes NULL."""
-        user = await _create_user(db_session, "sc_null")
-        project = await _create_project(db_session, user.id, "Test")
-        audit = await _create_audit(db_session, project.id)
+        project_id = "project-7"
+        audit = await _create_audit(db_session, project_id)
 
         sc = SourceCitation(
-            project_id=project.id, audit_id=audit.id,
-            domain="zhihu.com", platform="deepseek",
+            project_id=project_id,
+            audit_id=audit.id,
+            domain="zhihu.com",
+            platform="deepseek",
         )
         db_session.add(sc)
         await db_session.flush()
-        sc_id = sc.id
 
-        # Delete audit
         await db_session.delete(audit)
         await db_session.flush()
-
-        # Refresh citation — audit_id should be NULL
         await db_session.refresh(sc)
-        # Note: SQLite may not support ON DELETE SET NULL perfectly,
-        # but the model declares it. Test that the row still exists.
+
         assert sc is not None
 
 
-# ── Helpers ──
+@pytest.mark.asyncio
+async def test_claim_audit_is_idempotent(db_session):
+    audit = Audit(project_id="project-claim", status=QueryStatus.PENDING)
+    db_session.add(audit)
+    await db_session.flush()
 
-async def _create_user(db, username):
-    from app.models.models import User
-    from passlib.context import CryptContext
-    pwd = CryptContext(schemes=["bcrypt"]).hash("test123")
-    user = User(username=username, hashed_password=pwd)
-    db.add(user)
-    await db.flush()
-    return user
+    claimed = await audit_service.claim_audit(db_session, audit.id)
+    assert claimed is not None
+    assert claimed.status == QueryStatus.RUNNING
+    assert claimed.locked_by_worker is not None
+    assert claimed.locked_until is not None
 
-
-async def _create_project(db, user_id, name):
-    project = Project(name=name, user_id=user_id)
-    db.add(project)
-    await db.flush()
-    return project
+    second_claim = await audit_service.claim_audit(db_session, audit.id)
+    assert second_claim is None
 
 
-async def _create_prompt(db, project_id, text):
-    prompt = Prompt(project_id=project_id, text=text)
-    db.add(prompt)
-    await db.flush()
-    return prompt
+@pytest.mark.asyncio
+async def test_run_audit_rolls_back_before_marking_failed(monkeypatch):
+    """If audit execution fails, the session must be rolled back before persisting failure."""
 
+    audit = Audit(project_id="project-1", status=QueryStatus.PENDING)
+    audit.id = 42
 
-async def _create_audit(db, project_id):
-    audit = Audit(project_id=project_id, status=QueryStatus.PENDING)
-    db.add(audit)
-    await db.flush()
-    return audit
+    primary_db = MagicMock()
+    primary_db.execute = AsyncMock(return_value=MagicMock(rowcount=1))
+    primary_db.get = AsyncMock(return_value=audit)
+    primary_db.flush = AsyncMock()
+    primary_db.add = MagicMock()
+    primary_db.refresh = AsyncMock()
 
+    fallback_db = MagicMock()
+    fallback_db.get = AsyncMock(return_value=audit)
+    fallback_db.flush = AsyncMock()
+    fallback_db.add = MagicMock()
+    fallback_db.refresh = AsyncMock()
 
-async def _create_brand(db, project_id, name):
-    brand = Brand(project_id=project_id, name=name)
-    db.add(brand)
-    await db.flush()
-    return brand
+    steps: list[str] = []
+
+    async def _primary_commit():
+        steps.append("primary_commit")
+
+    async def _primary_rollback():
+        steps.append("primary_rollback")
+
+    async def _fallback_commit():
+        steps.append("fallback_commit")
+
+    primary_db.commit = AsyncMock(side_effect=_primary_commit)
+    primary_db.rollback = AsyncMock(side_effect=_primary_rollback)
+    fallback_db.commit = AsyncMock(side_effect=_fallback_commit)
+    fallback_db.rollback = AsyncMock()
+
+    class _SessionCtx:
+        def __init__(self, session):
+            self.session = session
+
+        async def __aenter__(self):
+            return self.session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    sessions = iter([primary_db, fallback_db])
+
+    monkeypatch.setattr(audit_service, "async_session", lambda: _SessionCtx(next(sessions)))
+    monkeypatch.setattr(
+        audit_service,
+        "_execute_audit",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    )
+    monkeypatch.setattr(audit_service, "publish", lambda *args, **kwargs: None)
+
+    await audit_service.run_audit(audit.id)
+
+    assert steps == ["primary_commit", "primary_rollback", "fallback_commit"]
+    assert audit.status == QueryStatus.FAILED
+    assert audit.error_message == "boom"
+    assert audit.completed_at is not None

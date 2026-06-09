@@ -1,23 +1,21 @@
 """Integration summary endpoint for GeniLink portal dashboard.
 
-Returns aggregated visibility data for a user's projects.
+Returns aggregated visibility data for a project.
 Accepts GeniLink RS256 JWT via Authorization: Bearer header.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.access import require_project_scope
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.models import (
     Audit,
-    Brand,
-    Project,
     QueryResult,
     Report,
     Suggestion,
-    User,
 )
 
 router = APIRouter()
@@ -25,41 +23,18 @@ router = APIRouter()
 
 @router.get("/summary")
 async def integration_summary(
-    current_user: User = Depends(get_current_user),
+    project_id: str = Query(..., description="Project ID (CUID string)"),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return dashboard summary for the user's most recently audited project."""
+    """Return dashboard summary for a project."""
+    require_project_scope(current_user, project_id)
 
-    # Get user's projects (pick the one with the most recent audit)
-    latest_audit_subq = (
-        select(Audit.project_id, func.max(Audit.created_at).label("last_audit"))
-        .group_by(Audit.project_id)
-        .subquery()
-    )
-
-    project_result = await db.execute(
-        select(Project)
-        .where(Project.user_id == current_user.id)
-        .order_by(Project.created_at.desc())
-    )
-    projects = project_result.scalars().all()
-
-    if not projects:
-        return {
-            "overallScore": None,
-            "mentionCount": 0,
-            "platformCoverage": [],
-            "competitorRank": None,
-            "suggestions": [],
-            "latestAuditDate": None,
-        }
-
-    # Get latest completed audit across all projects
-    project_ids = [p.id for p in projects]
+    # Get latest completed audit
     audit_result = await db.execute(
         select(Audit)
         .where(
-            Audit.project_id.in_(project_ids),
+            Audit.project_id == project_id,
             Audit.status.in_(["completed", "partial"]),
         )
         .order_by(Audit.created_at.desc())
@@ -69,7 +44,6 @@ async def integration_summary(
 
     # Get latest report for overall score
     overall_score = None
-    competitor_rank = None
     if latest_audit:
         report_result = await db.execute(
             select(Report)
@@ -87,7 +61,7 @@ async def integration_summary(
         .select_from(QueryResult)
         .join(Audit, QueryResult.audit_id == Audit.id)
         .where(
-            Audit.project_id.in_(project_ids),
+            Audit.project_id == project_id,
             QueryResult.mention_found == True,  # noqa: E712
         )
     )
@@ -96,7 +70,6 @@ async def integration_summary(
     # Get platform coverage from latest audit
     platform_coverage = []
     if latest_audit:
-        # Get per-platform mention rate
         from app.models.models import PlatformResponseRecord
 
         platform_result = await db.execute(
@@ -121,42 +94,36 @@ async def integration_summary(
             score = round((mentions / total) * 100)
             platform_coverage.append({"name": row.platform, "score": score})
 
-    # Get competitor rank from brands
-    brands_result = await db.execute(
-        select(Brand)
-        .where(
-            Brand.project_id.in_(project_ids),
-            Brand.is_competitor == False,  # noqa: E712
-        )
-        .limit(1)
-    )
-    client_brand = brands_result.scalar_one_or_none()
-
-    if client_brand and latest_audit:
-        # Simple rank calculation based on mention position
-        rank_result = await db.execute(
-            select(QueryResult)
-            .where(
-                QueryResult.audit_id == latest_audit.id,
-                QueryResult.brand_id == client_brand.id,
-                QueryResult.mention_found == True,  # noqa: E712
+    # Get competitor rank from brands snapshot
+    competitor_rank = None
+    if latest_audit and latest_audit.brands_json:
+        # Find own brand (non-competitor) and get its mention position
+        own_brands = [b for b in latest_audit.brands_json if not b.get("is_competitor", False)]
+        if own_brands:
+            own_brand_id = own_brands[0].get("id", "")
+            rank_result = await db.execute(
+                select(QueryResult)
+                .where(
+                    QueryResult.audit_id == latest_audit.id,
+                    QueryResult.brand_id == own_brand_id,
+                    QueryResult.mention_found == True,  # noqa: E712
+                )
+                .order_by(QueryResult.mention_position.asc())
+                .limit(1)
             )
-            .order_by(QueryResult.mention_position.asc())
-            .limit(1)
-        )
-        top_mention = rank_result.scalar_one_or_none()
-        if top_mention and top_mention.mention_position:
-            competitor_rank = top_mention.mention_position
+            top_mention = rank_result.scalar_one_or_none()
+            if top_mention and top_mention.mention_position:
+                competitor_rank = top_mention.mention_position
 
     # Get suggestions
     suggestions_result = await db.execute(
         select(Suggestion)
-        .where(Suggestion.project_id.in_(project_ids))
+        .where(Suggestion.project_id == project_id)
         .order_by(Suggestion.created_at.desc())
         .limit(5)
     )
     suggestions = [
-        {"text": s.text, "priority": s.priority}
+        {"text": s.description, "priority": s.priority}
         for s in suggestions_result.scalars().all()
     ]
 

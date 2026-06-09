@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.access import get_suggestion_for_project, require_project_scope
 from app.api.auth import get_current_user
-from app.api.projects import get_user_project
 from app.database import get_db
-from app.models.models import Project, Report, Suggestion, User
+from app.models.models import Report, Suggestion
 from app.api.schemas import SuggestionOut
 from app.services.suggestion_service import generate_suggestions
 
@@ -16,12 +16,13 @@ router = APIRouter()
 
 @router.get("/{project_id}", response_model=list[SuggestionOut])
 async def list_suggestions(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List all suggestions for a project, newest first."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
+
     result = await db.execute(
         select(Suggestion)
         .where(Suggestion.project_id == project_id)
@@ -32,12 +33,12 @@ async def list_suggestions(
 
 @router.post("/{project_id}/generate", response_model=list[SuggestionOut])
 async def generate(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate AI suggestions based on the latest report."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
 
     result = await db.execute(
         select(Report)
@@ -56,15 +57,12 @@ async def generate(
 @router.patch("/{suggestion_id}/resolve", response_model=SuggestionOut)
 async def resolve_suggestion(
     suggestion_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark a suggestion as resolved."""
-    s = await db.get(Suggestion, suggestion_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-    # Verify ownership via project
-    await get_user_project(s.project_id, current_user, db)
+    s = await get_suggestion_for_project(db, current_user, suggestion_id)
+
     s.is_resolved = True
     await db.commit()
     await db.refresh(s)
@@ -74,14 +72,12 @@ async def resolve_suggestion(
 @router.delete("/{suggestion_id}")
 async def delete_suggestion(
     suggestion_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a suggestion."""
-    s = await db.get(Suggestion, suggestion_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-    await get_user_project(s.project_id, current_user, db)
+    s = await get_suggestion_for_project(db, current_user, suggestion_id)
+
     await db.delete(s)
     await db.commit()
     return {"ok": True}

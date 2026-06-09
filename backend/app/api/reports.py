@@ -3,16 +3,16 @@
 import io
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.access import get_report_for_project
 from app.api.auth import get_current_user
-from app.api.projects import get_user_project
 from app.constants import PLATFORM_LABELS
 from app.database import get_db
-from app.models.models import Brand, Project, QueryResult, Report, User
+from app.models.models import Audit, QueryResult, Report
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 router = APIRouter()
@@ -26,23 +26,16 @@ _env = Environment(
 @router.get("/{report_id}/pdf")
 async def export_pdf(
     report_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Export a report as PDF."""
-    report = await db.get(Report, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = await get_report_for_project(db, current_user, report_id)
 
-    await get_user_project(report.project_id, current_user, db)
-    project = await db.get(Project, report.project_id)
-
-    # Load brands
-    brands_result = await db.execute(
-        select(Brand).where(Brand.project_id == report.project_id)
-    )
-    brands = brands_result.scalars().all()
-    brand_map = {b.id: b.name for b in brands}
+    # Load audit for brands snapshot
+    audit = await db.get(Audit, report.audit_id)
+    brand_map = {b.get("id", ""): b.get("name", "") for b in (audit.brands_json if audit else [])}
+    project_name = report.project_id
 
     # Load query results for this audit
     qr_result = await db.execute(
@@ -106,7 +99,7 @@ async def export_pdf(
     # Render HTML
     template = _env.get_template("report.html")
     html = template.render(
-        project_name=project.name if project else "Unknown",
+        project_name=project_name,
         report_date=datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
         overall_score=report.overall_score,
         mention_rate=f"{report.mention_rate:.1%}",

@@ -66,12 +66,17 @@ router.beforeEach((to) => {
   if (to.meta.public) return true
   const token = localStorage.getItem('token')
   if (!token) {
-    // Redirect to GeniLink SSO
-    const genilinkUrl = import.meta.env.VITE_GENILINK_URL || 'https://genilink.cn'
-    const ssoUrl = new URL(`${genilinkUrl}/api/auth/sso`)
-    ssoUrl.searchParams.set('service', 'visibility')
-    ssoUrl.searchParams.set('redirect_uri', `${window.location.origin}/sso/callback`)
-    window.location.href = ssoUrl.toString()
+    const genilinkUrl = import.meta.env.VITE_GENILINK_URL
+    if (genilinkUrl) {
+      // Redirect to GeniLink SSO
+      const ssoUrl = new URL(`${genilinkUrl}/api/auth/sso`)
+      ssoUrl.searchParams.set('service', 'visibility')
+      ssoUrl.searchParams.set('redirect_uri', `${window.location.origin}/sso/callback`)
+      window.location.href = ssoUrl.toString()
+    } else {
+      // Fallback to local login page
+      return { name: 'login', query: { redirect: to.fullPath } }
+    }
     return false
   }
   return true

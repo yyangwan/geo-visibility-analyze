@@ -1,27 +1,27 @@
 """Trend data API — aggregated historical visibility scores."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.access import require_project_scope
 from app.api.auth import get_current_user
-from app.api.projects import get_user_project
 from app.database import get_db
-from app.models.models import Audit, Project, Report, User
+from app.models.models import Audit, Report
 
 router = APIRouter()
 
 
 @router.get("/{project_id}")
 async def get_trend_data(
-    project_id: int,
+    project_id: str,
     period: str = Query("daily", pattern="^(daily|weekly|monthly)$"),
     limit: int = Query(30, ge=1, le=365),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get historical trend data for a project."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
 
     # Get reports with their audits, ordered by date
     result = await db.execute(
@@ -58,12 +58,12 @@ async def get_trend_data(
 
 @router.get("/{project_id}/latest-report")
 async def get_latest_report(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the latest report for a project."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
 
     result = await db.execute(
         select(Report)
@@ -79,13 +79,13 @@ async def get_latest_report(
 
 @router.get("/{project_id}/audits-history")
 async def get_audits_history(
-    project_id: int,
+    project_id: str,
     limit: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get audit history for a project with status."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
 
     result = await db.execute(
         select(Audit)

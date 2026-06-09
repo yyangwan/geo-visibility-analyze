@@ -1,7 +1,7 @@
 """add genilink_user_id column
 
 Revision ID: add_genilink_user_id
-Revises: fix_charset_to_utf8mb4
+Revises: fix_charset_utf8mb4
 Create Date: 2026-05-15
 """
 
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "add_genilink_user_id"
-down_revision = "fix_charset_to_utf8mb4"
+down_revision = "fix_charset_utf8mb4"
 branch_labels = None
 depends_on = None
 

@@ -5,15 +5,11 @@ from unittest.mock import MagicMock
 from app.services.report_service import _compute_competitor_rank
 
 
-def _make_brand(id: int, name: str, is_competitor: bool) -> MagicMock:
-    b = MagicMock()
-    b.id = id
-    b.name = name
-    b.is_competitor = is_competitor
-    return b
+def _make_brand(id: str, name: str, is_competitor: bool) -> dict:
+    return {"id": id, "name": name, "is_competitor": is_competitor}
 
 
-def _make_result(brand_id: int, mention_found: bool) -> MagicMock:
+def _make_result(brand_id: str, mention_found: bool) -> MagicMock:
     r = MagicMock()
     r.brand_id = brand_id
     r.mention_found = mention_found
@@ -23,37 +19,37 @@ def _make_result(brand_id: int, mention_found: bool) -> MagicMock:
 class TestCompetitorRank:
     def test_primary_wins(self):
         brand_map = {
-            1: _make_brand(1, "BrandA", False),
-            2: _make_brand(2, "BrandB", True),
+            "brand-a": _make_brand("brand-a", "BrandA", False),
+            "brand-b": _make_brand("brand-b", "BrandB", True),
         }
         results = [
-            _make_result(1, True),
-            _make_result(1, True),
-            _make_result(2, True),
+            _make_result("brand-a", True),
+            _make_result("brand-a", True),
+            _make_result("brand-b", True),
         ]
         rank = _compute_competitor_rank(results, brand_map)
         assert rank == 1
 
     def test_primary_loses(self):
         brand_map = {
-            1: _make_brand(1, "BrandA", False),
-            2: _make_brand(2, "BrandB", True),
+            "brand-a": _make_brand("brand-a", "BrandA", False),
+            "brand-b": _make_brand("brand-b", "BrandB", True),
         }
         results = [
-            _make_result(1, True),
-            _make_result(2, True),
-            _make_result(2, True),
-            _make_result(2, True),
+            _make_result("brand-a", True),
+            _make_result("brand-b", True),
+            _make_result("brand-b", True),
+            _make_result("brand-b", True),
         ]
         rank = _compute_competitor_rank(results, brand_map)
         assert rank == 2
 
     def test_no_mentions(self):
         brand_map = {
-            1: _make_brand(1, "BrandA", False),
+            "brand-a": _make_brand("brand-a", "BrandA", False),
         }
         results = [
-            _make_result(1, False),
+            _make_result("brand-a", False),
         ]
         rank = _compute_competitor_rank(results, brand_map)
         assert rank is None

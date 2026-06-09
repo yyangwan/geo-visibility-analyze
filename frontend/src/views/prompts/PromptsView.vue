@@ -15,6 +15,11 @@ const categories = [
   { value: 'compare', label: '对比类' },
   { value: 'evaluate', label: '评测类' },
   { value: 'scenario', label: '场景类' },
+  { value: 'problem_solution', label: '问题解决类' },
+  { value: 'alternative_finding', label: '替代方案类' },
+  { value: 'decision_help', label: '决策辅助类' },
+  { value: 'regret_avoidance', label: '避坑类' },
+  { value: 'performance_specs', label: '参数性能类' },
 ]
 
 async function handleAdd() {
@@ -45,7 +50,7 @@ async function handleAutoGenerate() {
   if (!store.currentProject || generating.value) return
   generating.value = true
   try {
-    await generatePrompts(store.currentProject.id, 10)
+    await generatePrompts(store.currentProject.id, 10, store.currentProject.product_category)
     await store.fetchPrompts(store.currentProject.id)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || 'AI生成失败')

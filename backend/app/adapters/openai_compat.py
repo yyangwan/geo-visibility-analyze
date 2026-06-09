@@ -36,7 +36,7 @@ class OpenAICompatAdapter(PlatformAdapter):
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
-                proxy=None,  # bypass system proxy — domestic APIs don't need it
+                trust_env=False,  # bypass system proxy — domestic APIs don't need it
             )
         return self._client
 

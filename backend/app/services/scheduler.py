@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.logging_config import get_logger
-from app.models.models import Audit, ScheduledJob
+from app.models.models import Audit, QueryStatus, ScheduledJob
 from app.services.audit_service import run_audit
 from app.services.report_service import generate_report
 
@@ -118,6 +118,7 @@ async def _execute_scheduled_job(job: ScheduledJob, db) -> None:
 
     audit = Audit(
         project_id=job.project_id,
+        status=QueryStatus.PENDING,
         platforms_json=job.platforms_json or [],
     )
     db.add(audit)

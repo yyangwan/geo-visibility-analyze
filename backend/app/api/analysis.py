@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.access import get_audit_for_project, require_project_scope
 from app.api.auth import get_current_user
-from app.api.projects import get_user_project
 from app.api.schemas import ContentIntelligenceOut, ResponseAnalysisOut
 from app.database import get_db
 from app.models.models import (
@@ -16,7 +16,6 @@ from app.models.models import (
     PlatformResponseRecord,
     Prompt,
     ResponseAnalysis,
-    User,
 )
 from app.services.response_analysis_service import retry_failed_analyses, run_analysis_for_audit
 
@@ -26,14 +25,11 @@ router = APIRouter()
 @router.get("/audits/{audit_id}/analysis", response_model=list[ResponseAnalysisOut])
 async def get_audit_analysis(
     audit_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List all ResponseAnalysis records for an audit."""
-    audit = await db.get(Audit, audit_id)
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
-    await get_user_project(audit.project_id, current_user, db)
+    await get_audit_for_project(db, current_user, audit_id)
 
     result = await db.execute(
         select(ResponseAnalysis)
@@ -82,14 +78,11 @@ async def get_audit_analysis(
 @router.post("/audits/{audit_id}/analyze")
 async def trigger_analysis(
     audit_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Manually trigger analysis for all PRRs in an audit."""
-    audit = await db.get(Audit, audit_id)
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
-    await get_user_project(audit.project_id, current_user, db)
+    audit = await get_audit_for_project(db, current_user, audit_id)
 
     if audit.status.value not in ("completed", "partial"):
         raise HTTPException(status_code=400, detail="Audit must be completed or partial before analysis")
@@ -101,14 +94,11 @@ async def trigger_analysis(
 @router.post("/audits/{audit_id}/analyze/retry")
 async def retry_analysis(
     audit_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Retry all failed analyses for an audit."""
-    audit = await db.get(Audit, audit_id)
-    if not audit:
-        raise HTTPException(status_code=404, detail="Audit not found")
-    await get_user_project(audit.project_id, current_user, db)
+    await get_audit_for_project(db, current_user, audit_id)
 
     count = await retry_failed_analyses(audit_id)
     return {"message": f"Retrying {count} failed analyses", "count": count}
@@ -116,12 +106,12 @@ async def retry_analysis(
 
 @router.get("/projects/{project_id}/content-intelligence", response_model=ContentIntelligenceOut)
 async def get_content_intelligence(
-    project_id: int,
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get aggregated content intelligence data for a project's latest audit."""
-    await get_user_project(project_id, current_user, db)
+    require_project_scope(current_user, project_id)
 
     # Find latest completed/partial audit
     audit_result = await db.execute(
@@ -134,16 +124,6 @@ async def get_content_intelligence(
     audit = audit_result.scalar_one_or_none()
     if not audit:
         return ContentIntelligenceOut()
-
-    # Auto-trigger analysis if there are pending records
-    pending_count = await db.execute(
-        select(ResponseAnalysis)
-        .join(PlatformResponseRecord, ResponseAnalysis.response_record_id == PlatformResponseRecord.id)
-        .where(PlatformResponseRecord.audit_id == audit.id)
-        .where(ResponseAnalysis.status.in_(["pending", "failed"]))
-    )
-    if pending_count.scalars().first():
-        asyncio.create_task(run_analysis_for_audit(audit.id))
 
     # Load all PRRs for this audit
     prr_result = await db.execute(

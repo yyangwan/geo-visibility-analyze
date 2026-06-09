@@ -16,13 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.models import (
-    Brand,
+    Audit,
     PlatformResponseRecord,
     QueryResult,
     Report,
     ResponseAnalysis,
     Suggestion,
 )
+from app.services.audit_service import BrandData
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +101,17 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
     """Two-pass suggestion generation: strategy then detail."""
     project_id = report.project_id
 
-    # Gather context
-    brands_result = await db.execute(
-        select(Brand).where(Brand.project_id == project_id)
-    )
-    brands = brands_result.scalars().all()
+    # Gather context — load brands from the audit snapshot
+    audit = await db.get(Audit, report.audit_id)
+    brands = [
+        BrandData(
+            id=b.get("id", ""),
+            name=b.get("name", ""),
+            aliases=b.get("aliases", []),
+            is_competitor=b.get("is_competitor", False),
+        )
+        for b in ((audit.brands_json or []) if audit else [])
+    ]
     brand_names = [b.name for b in brands if not b.is_competitor]
     competitors = [b.name for b in brands if b.is_competitor]
 

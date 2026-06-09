@@ -4,6 +4,8 @@ Provides JSON logging for production and human-readable console output for dev.
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import sys
 
 import structlog
@@ -46,12 +48,31 @@ def setup_logging(debug: bool = False) -> None:
         ],
     )
 
+    log_dir = Path(__file__).resolve().parents[1] / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "audit.log"
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
+
+    try:
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+    except OSError:
+        # Best-effort file logging. Keep the app booting even if the project
+        # path is temporarily unavailable or locked by the host environment.
+        pass
+
     root_logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     # Quiet noisy loggers

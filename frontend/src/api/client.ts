@@ -190,10 +190,11 @@ export const deleteSuggestion = (suggestionId: number) =>
   api.delete(`/suggestions/${suggestionId}`)
 
 // Prompt Auto-generation
-export const generatePrompts = (projectId: number, count = 10) =>
+export const generatePrompts = (projectId: number, count = 10, productCategory = '') =>
   api.post<Prompt[]>(`/projects/${projectId}/prompts/generate`, {
     project_id: projectId,
     count,
+    product_category: productCategory,
   })
 
 // Audit SSE

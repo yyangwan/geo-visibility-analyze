@@ -1,68 +1,14 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.adapters.registry import available_platforms
-from app.models.models import PromptCategory, QueryStatus
-
-
-# --- Auth ---
-class UserRegister(BaseModel):
-    username: str
-    password: str
-
-
-class UserOut(BaseModel):
-    id: int
-    username: str
-    is_active: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-# --- Projects ---
-class ProjectCreate(BaseModel):
-    name: str
-    industry: str = "insurance"
-    product_category: str = ""
-
-
-class ProjectUpdate(BaseModel):
-    name: str | None = None
-    industry: str | None = None
-    product_category: str | None = None
-
-
-class ProjectOut(BaseModel):
-    id: int
-    name: str
-    industry: str
-    product_category: str
-    user_id: int
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-# --- Brands ---
-class BrandCreate(BaseModel):
-    name: str
-    aliases: list[str] = []
-    is_competitor: bool = False
-
-
-class BrandOut(BaseModel):
-    id: int
-    name: str
-    aliases: list[str]
-    is_competitor: bool
-
-    model_config = {"from_attributes": True}
+from app.models.models import AuditStage, PromptCategory, QueryStatus, RunStatus
 
 
 # --- Prompts ---
 class PromptCreate(BaseModel):
+    project_id: str
     text: str
     category: PromptCategory = PromptCategory.RECOMMEND
     is_auto_generated: bool = True
@@ -70,6 +16,7 @@ class PromptCreate(BaseModel):
 
 class PromptOut(BaseModel):
     id: int
+    project_id: str
     text: str
     category: PromptCategory
     is_auto_generated: bool
@@ -82,18 +29,31 @@ _ALL_PLATFORMS = available_platforms()
 
 
 class AuditCreate(BaseModel):
-    project_id: int
+    project_id: str
     platforms: list[str] = _ALL_PLATFORMS
+    brands: list[dict] = []
 
 
 class AuditOut(BaseModel):
     id: int
-    project_id: int
+    project_id: str
     status: QueryStatus
+    stage: AuditStage = AuditStage.QUEUED
+    stage_status: RunStatus = RunStatus.PENDING
     platforms_json: list[str]
+    brands_json: list[dict] = []
     created_at: datetime
     completed_at: datetime | None = None
+    stage_started_at: datetime | None = None
+    stage_updated_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    attempt_count: int = 0
+    error_code: str | None = None
     error_message: str | None = None
+    recoverable_error: bool = False
+    next_retry_at: datetime | None = None
+    locked_by_worker: str | None = None
+    locked_until: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -118,7 +78,7 @@ class QueryResultOut(BaseModel):
 # --- Reports ---
 class ReportOut(BaseModel):
     id: int
-    project_id: int
+    project_id: str
     audit_id: int
     overall_score: float
     mention_rate: float
@@ -133,14 +93,14 @@ class ReportOut(BaseModel):
 
 # --- Scheduled Jobs ---
 class ScheduledJobCreate(BaseModel):
-    project_id: int
+    project_id: str
     cron_expression: str  # e.g. "0 22 * * *" = every day at 22:00
     platforms: list[str] = _ALL_PLATFORMS
 
 
 class ScheduledJobOut(BaseModel):
     id: int
-    project_id: int
+    project_id: str
     cron_expression: str
     platforms_json: list[str]
     is_active: bool
@@ -154,7 +114,7 @@ class ScheduledJobOut(BaseModel):
 # --- Suggestions ---
 class SuggestionOut(BaseModel):
     id: int
-    project_id: int
+    project_id: str
     report_id: int
     category: str
     title: str
@@ -169,8 +129,16 @@ class SuggestionOut(BaseModel):
 
 # --- Prompt Generation ---
 class PromptGenerateRequest(BaseModel):
-    project_id: int
+    project_id: str
+    project_name: str = ""
+    project_url: str = ""
     industry: str = ""
+    product_category: str = ""
+    product_name: str = ""
+    product_description: str = ""
+    product_url: str = ""
+    product_keywords: list[str] = Field(default_factory=list)
+    brand_names: list[str] = Field(default_factory=list)
     brand_name: str = ""
     count: int = 10
 

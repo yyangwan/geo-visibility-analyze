@@ -12,13 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
     Audit,
-    Brand,
     PlatformResponseRecord,
     QueryResult,
     Report,
     ResponseAnalysis,
     SourceCitation,
 )
+from app.services.audit_service import BrandData
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ from app.models.models import (
 # ---------------------------------------------------------------------------
 
 async def get_source_authority_trends(
-    db: AsyncSession, project_id: int, limit: int = 10
+    db: AsyncSession, project_id: str, limit: int = 10
 ) -> dict:
     """Track which sources/domains AI platforms cite over time."""
     # Load recent completed/partial audits
@@ -145,13 +145,26 @@ async def get_source_authority_trends(
 # P3.2: Competitor Positioning Map
 # ---------------------------------------------------------------------------
 
-async def get_competitor_positioning_map(db: AsyncSession, project_id: int) -> dict:
+async def get_competitor_positioning_map(db: AsyncSession, project_id: str) -> dict:
     """Brand positioning across mention frequency, sentiment, and authority."""
-    # Load brands
-    brand_result = await db.execute(
-        select(Brand).where(Brand.project_id == project_id)
+    # Load brands from the latest audit snapshot for this project
+    latest_audit_result = await db.execute(
+        select(Audit)
+        .where(Audit.project_id == project_id)
+        .where(Audit.status.in_(["completed", "partial"]))
+        .order_by(Audit.created_at.desc())
+        .limit(1)
     )
-    brands = brand_result.scalars().all()
+    latest_audit = latest_audit_result.scalar_one_or_none()
+    brands = [
+        BrandData(
+            id=b.get("id", ""),
+            name=b.get("name", ""),
+            aliases=b.get("aliases", []),
+            is_competitor=b.get("is_competitor", False),
+        )
+        for b in ((latest_audit.brands_json or []) if latest_audit else [])
+    ]
 
     if not brands:
         return {"brands": [], "quadrant_labels": {}}
@@ -294,7 +307,7 @@ async def get_competitor_positioning_map(db: AsyncSession, project_id: int) -> d
 # ---------------------------------------------------------------------------
 
 async def get_answer_structure_evolution(
-    db: AsyncSession, project_id: int, limit: int = 10
+    db: AsyncSession, project_id: str, limit: int = 10
 ) -> dict:
     """Track how AI platforms structure their answers over time."""
     # Load audits
@@ -422,7 +435,7 @@ async def get_answer_structure_evolution(
 # ---------------------------------------------------------------------------
 
 async def get_multi_audit_comparison(
-    db: AsyncSession, project_id: int, audit_ids: list[int]
+    db: AsyncSession, project_id: str, audit_ids: list[int]
 ) -> dict:
     """Compare multiple audits side-by-side with diffs."""
     if len(audit_ids) < 2 or len(audit_ids) > 5:
@@ -443,6 +456,14 @@ async def get_multi_audit_comparison(
 
     valid_ids = [a.id for a in audits]
     audit_dates = {a.id: a.created_at.strftime("%Y-%m-%d") for a in audits}
+
+    # Build brand lookup from the first audit's brands_json snapshot
+    brand_lookup: dict[str, str] = {}  # brand_id -> brand_name
+    if audits:
+        for b in (audits[0].brands_json or []):
+            bid = b.get("id", "")
+            if bid:
+                brand_lookup[bid] = b.get("name", "")
 
     snapshots = []
     all_sources_per_audit: dict[int, set[str]] = {}
@@ -496,12 +517,12 @@ async def get_multi_audit_comparison(
         brand_total: dict[str, int] = defaultdict(int)
         brand_mentions_map: dict[str, int] = defaultdict(int)
         for qr in query_results:
-            # Get brand name via brand_id
-            brand = await db.get(Brand, qr.brand_id)
-            if brand:
-                brand_total[brand.name] += 1
+            # Get brand name via brand_lookup (from brands_json snapshot)
+            brand_name = brand_lookup.get(qr.brand_id)
+            if brand_name:
+                brand_total[brand_name] += 1
                 if qr.mention_found:
-                    brand_mentions_map[brand.name] += 1
+                    brand_mentions_map[brand_name] += 1
 
         competitor_rates = []
         for name, total in brand_total.items():

@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.adapters.registry import PLATFORM_LABELS, available_platforms
+from app.api.access import require_workspace_scope
 from app.api.auth import get_current_user
-from app.models.models import User
 from app.config import settings
 
 router = APIRouter()
@@ -19,9 +19,10 @@ class PlatformInfo(BaseModel):
 
 @router.get("", response_model=list[PlatformInfo])
 async def list_platforms(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """Return all platforms with their label and whether an API key is configured."""
+    require_workspace_scope(current_user)
     api_key_map = {
         "deepseek": settings.deepseek_api_key,
         "qwen": settings.qwen_api_key,
