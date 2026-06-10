@@ -108,11 +108,11 @@ export const addBrand = (projectId: number, data: { name: string; aliases?: stri
 
 // Prompts
 export const getPrompts = (projectId: number) =>
-  api.get<Prompt[]>(`/projects/${projectId}/prompts`)
+  api.get<Prompt[]>(`/prompts?project_id=${projectId}`)
 export const addPrompt = (projectId: number, data: { text: string; category?: string }) =>
-  api.post<Prompt>(`/projects/${projectId}/prompts`, data)
+  api.post<Prompt>(`/prompts`, { ...data, project_id: projectId })
 export const deletePrompt = (projectId: number, promptId: number) =>
-  api.delete(`/projects/${projectId}/prompts/${promptId}`)
+  api.delete(`/prompts/${promptId}?project_id=${projectId}`)
 
 // Audits
 export const createAudit = (data: { project_id: number; platforms?: string[] }) =>
@@ -191,7 +191,7 @@ export const deleteSuggestion = (suggestionId: number) =>
 
 // Prompt Auto-generation
 export const generatePrompts = (projectId: number, count = 10, productCategory = '') =>
-  api.post<Prompt[]>(`/projects/${projectId}/prompts/generate`, {
+  api.post<Prompt[]>(`/prompts/generate`, {
     project_id: projectId,
     count,
     product_category: productCategory,

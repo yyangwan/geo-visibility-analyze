@@ -61,6 +61,33 @@ async def delete_prompt(
     await db.commit()
 
 
+@router.put("/{prompt_id}", response_model=PromptOut)
+@router.patch("/{prompt_id}", response_model=PromptOut)
+async def update_prompt(
+    prompt_id: int,
+    project_id: str,
+    data: PromptCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update an existing prompt."""
+    require_project_scope(current_user, project_id)
+    prompt = await db.get(Prompt, prompt_id)
+    if not prompt or prompt.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+
+    # Update fields
+    if data.text is not None:
+        prompt.text = data.text
+    if data.category is not None:
+        prompt.category = data.category
+    # Note: platform field doesn't exist in Prompt model, ignoring if provided
+
+    await db.commit()
+    await db.refresh(prompt)
+    return prompt
+
+
 @router.post("/generate", response_model=list[PromptOut])
 async def generate_prompts_endpoint(
     data: PromptGenerateRequest,
@@ -80,6 +107,8 @@ async def generate_prompts_endpoint(
         product_keywords=data.product_keywords or [],
         brand_names=data.brand_names or [],
         count=data.count,
+        use_real_queries=data.use_real_queries,
+        harvest_sources=data.harvest_sources,
     )
 
     if not generated:

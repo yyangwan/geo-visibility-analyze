@@ -141,6 +141,8 @@ class PromptGenerateRequest(BaseModel):
     brand_names: list[str] = Field(default_factory=list)
     brand_name: str = ""
     count: int = 10
+    use_real_queries: bool = True  # Harvest real user queries from search engines
+    harvest_sources: list[str] | None = None  # Sources: ['baidu', 'sogou', 'bing'], defaults to ['baidu', 'sogou']
 
 
 # --- Response Analysis ---

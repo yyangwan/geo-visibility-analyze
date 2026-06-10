@@ -1,13 +1,17 @@
-"""Prompt auto-generation service - 4-Stage Pipeline
+"""Prompt auto-generation service - 5-Stage Pipeline
 
 Follows GeniLink framework for high-quality prompt generation:
 Stage 1: buildProductProfile - Extract structured profile from inputs
+Stage 1.5: harvestRealQueries - Collect authentic user queries from search engines
 Stage 2: generatePromptSpecs - Create intent-based prompt specifications
 Stage 3: renderPrompts - Fill templates with profile data
 Stage 4: lintPrompts - Quality gate validation
 
 Goal: Produce prompts that are brand-free, intent-specific, and naturally
 occurring in real user decision scenarios.
+
+NEW: Real query harvesting from search engine autocomplete APIs provides
+authentic user questions that real people actually search for.
 """
 
 from __future__ import annotations
@@ -17,6 +21,8 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
+
+from .query_harvester import harvest_queries, QueryHarvester
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,10 @@ _DECISION_FACTORS = [
     "隐藏成本",
 ]
 
+# Note: PERFORMANCE_METRICS are software-specific (响应速度, 并发性能).
+# These are NOT used directly in templates to avoid semantic mismatches with physical products.
+# Instead, performance_specs templates use {factor} from FOCUS_FACTORS which are universally applicable.
+# Example: "手冲咖啡壶的响应速度" is nonsense, but "手冲咖啡壶的易用性" makes sense.
 _PERFORMANCE_METRICS = [
     "响应速度",
     "处理能力",
@@ -126,61 +136,66 @@ _GENERIC_SUBJECTS = {
     "服务",
 }
 
-# Question Templates per intent
+# Question Templates per intent (自然口语化 - 模拟真实用户在AI助手中的提问方式)
+# 设计原则:
+# 1. 用"常用的/市面上的/普通的"代替"普通方案" (更符合日常口语)
+# 2. 减少正式感,增加对话感 (用"吗/呢/啊"等语气词)
+# 3. 避免过于结构化的句式 (不用"既想要X又想要Y")
+# 4. 关注实际体验,而非抽象对比
 _QUESTION_TEMPLATES = {
     "recommend": [
-        "{budget}预算内，{subject}怎么选更适合{persona}？",
-        "适合{scenario}场景的{subject}，优先看哪些参数？",
-        "{subject}如果更看重{factor}，应该怎么挑？",
-        "第一次买{subject}，最容易踩的坑有哪些？",
+        "{persona}用{subject}，预算{budget}以内，有推荐的吗？",
+        "{scenario}用{subject}，选的时候主要看什么？",
+        "想买个{factor}好点的{subject}，怎么选更合适？",
+        "新手买{subject}有什么需要注意的吗？",
     ],
     "compare": [
-        "{subject}里，偏{factor}的版本和偏{alt_view}的版本，哪种更适合{scenario}？",
-        "同样是{subject}，{factor_a}和{factor_b}哪个更值得优先考虑？",
-        "{subject}和更通用的替代方案相比，哪种更适合{persona}？",
-        "想兼顾{factor_a}和{factor_b}，{subject}应该怎么选？",
+        "{scenario}用{subject}，{factor}和{alt_view}哪个更重要？",
+        "{subject}的{factor_a}和{factor_b}，哪个更影响实际使用？",
+        "{persona}觉得{subject}好用吗，还是用{alt_view}就够了？",
+        "{factor_a}和{factor_b}都想要，{subject}该怎么选？",
     ],
     "evaluate": [
-        "{subject}真的比更常见的替代方案更好吗？优势和局限分别是什么？",
-        "{subject}在{scenario}场景下，体验会比普通方案好多少？",
-        "{subject}值不值得买，主要看哪些真实使用差异？",
-        "{subject}的核心卖点，哪些是营销，哪些是真的有用？",
+        "{subject}值得买吗？和{alt_view}比有什么优势？",
+        "{scenario}用{subject}，实际体验能好多少？",
+        "{subject}跟市面上常用的比，差别大吗？",
+        "{subject}哪些卖点是真的有用，哪些是噱头？",
     ],
     "scenario": [
-        "如果我在{scenario}里用{subject}，要重点注意什么？",
-        "{subject}在{scenario}场景下怎么用最顺手？",
-        "面对{scenario}这种情况，{subject}有没有更合适的用法？",
-        "{subject}适合{persona}日常使用吗？",
+        "{scenario}想用{subject}，有什么需要注意的吗？",
+        "{scenario}用{subject}怎么最顺手？",
+        "{scenario}这种情况下，{subject}有什么特别的用法吗？",
+        "{persona}平时用{subject}合适吗？",
     ],
     "problem_solution": [
-        "{subject}在{scenario}场景下，最常遇到什么问题？有什么解决方案？",
-        "如果遇到{factor}方面的困扰，{subject}能帮上忙吗？",
-        "{scenario}时经常遇到{description_hint}，有没有{subject}能缓解？",
-        "{scenario}场景下，{subject}在{factor}方面的实际体验怎么样？",
+        "{scenario}用{subject}经常出问题吗？怎么解决比较好？",
+        "遇到{factor}问题，{subject}能帮上忙吗？",
+        "{scenario}经常{description_hint}，{subject}能缓解吗？",
+        "{scenario}用{subject}在{factor}方面体验如何？",
     ],
     "alternative_finding": [
-        "除了常见选择，{subject}还有哪些值得关注的替代方案？",
-        "{subject}和更通用的方案相比，实际差异有多大？",
-        "想避开{description_hint}这类问题，{subject}有没有更好的替代选择？",
-        "{scenario}场景下，{subject}的冷门替代方案里有没有性价比高的？",
+        "除了常见的，{subject}还有什么好用的替代吗？",
+        "{subject}跟常用的比，差别大吗？",
+        "不想遇到{description_hint}，{subject}有更好的选择吗？",
+        "{scenario}用{subject}，有什么小众但好用的替代吗？",
     ],
     "decision_help": [
-        "{persona}在{subject}的选择上最容易被哪些说法误导？",
-        "{subject}在{factor_a}和{factor_b}之间取舍时，真实体验差异大吗？",
-        "买{subject}时，{factor}到底值不值得多花钱？",
-        "{scenario}用途下，{subject}应该优先看哪些参数，哪些可以忽略？",
+        "{persona}选{subject}容易遇到哪些坑？",
+        "{subject}在{factor_a}和{factor_b}之间，实际差别大吗？",
+        "买{subject}时，{factor}值得多花钱吗？",
+        "{scenario}用{subject}，主要看哪些参数？哪些可以不用管？",
     ],
     "regret_avoidance": [
-        "{subject}买回来最容易后悔的原因是什么？",
-        "{subject}在{scenario}场景下的真实槽点有哪些？",
-        "买{subject}之前，{persona}最容易忽视什么问题？",
-        "{subject}在{factor}方面的常见差评，主要是什么原因造成的？",
+        "买了{subject}最常见后悔的原因是什么？",
+        "{scenario}用{subject}有什么常见槽点？",
+        "{persona}买{subject}前经常忽略什么问题？",
+        "{subject}在{factor}方面差评多，主要因为什么？",
     ],
     "performance_specs": [
-        "{subject}在{perf_metric}方面的实际表现怎么样？",
-        "{scenario}场景下，{subject}的{perf_metric}能达到什么水平？",
-        "{subject}在{perf_metric_a}和{perf_metric_b}之间，哪个更影响实际体验？",
-        "专业用户在{subject}的选择上，最看重{perf_metric}的哪些指标？",
+        "{subject}实际用起来，{factor}表现怎么样？",
+        "{scenario}用{subject}，{factor}能达到什么程度？",
+        "{subject}的{factor_a}和{factor_b}，实际差别大吗？",
+        "专业用户挑{subject}时，主要看哪些{factor}指标？",
     ],
 }
 
@@ -223,7 +238,9 @@ class ProductProfile:
 
         return {
             "subject": self.subject,
-            "category": self.category or self.industry or "相关产品",
+            # Note: industry removed from fallback to avoid leaking classification labels into prompts
+            # Real users don't include "企业服务" or "电商" in their natural queries
+            "category": self.category or "相关产品",
             "scenario": self.scenarios[0] if self.scenarios else _SCENARIOS[0],
             "persona": self.personas[0] if self.personas else _PERSONAS[0],
             "budget": _BUDGETS[0],
@@ -649,6 +666,7 @@ def _backfill_prompts(
                     "text": text,
                     "category": intent,
                     "quality_score": lint_result.score,
+                    "source": "backfill",
                 })
 
         backfill_index += 1
@@ -658,6 +676,7 @@ def _backfill_prompts(
             break
 
     return backfilled[:target_count]
+
 
 
 # ---------------------------------------------------------------------------
@@ -676,13 +695,21 @@ async def generate_prompts(
     product_keywords: list[str] | None = None,
     brand_names: list[str] | None = None,
     count: int = 10,
+    use_real_queries: bool = True,
+    harvest_sources: list[str] | None = None,
 ) -> list[dict]:
-    """Generate high-intent, brand-free prompts using 4-stage pipeline.
+    """Generate high-intent, brand-free prompts using 5-stage pipeline.
 
     Stage 1: buildProductProfile - Extract structured profile
-    Stage 2: generatePromptSpecs - Create intent-based specs
+    Stage 1.5: harvestRealQueries - Collect authentic user queries (NEW)
+    Stage 2: generatePromptSpecs - Create intent-based prompt specifications
     Stage 3: renderPrompts - Fill templates with profile data
     Stage 4: lintPrompts - Quality gate validation
+
+    Args:
+        use_real_queries: If True, harvest real queries from search engines
+        harvest_sources: Sources to query ['baidu', 'sogou', 'bing'],
+                         defaults to ['baidu', 'sogou']
 
     Returns list of dicts with: text, category, quality_score
     """
@@ -700,35 +727,118 @@ async def generate_prompts(
         brand_names=brand_names,
     )
 
-    # Stage 2: Generate prompt specifications
-    specs = generate_prompt_specs(count, profile)
+    # Stage 1.5: Harvest real user queries (NEW)
+    real_queries = []
+    real_query_texts = set()  # For deduping
 
-    # Stage 3: Render prompts
-    prompts_text = render_prompts(specs, profile)
+    if use_real_queries:
+        # Use the cleaned subject for harvesting (brand-free)
+        harvest_keyword = profile.subject
+        if len(harvest_keyword) < 2:
+            # Fallback to keywords if subject is too short
+            if product_keywords:
+                harvest_keyword = " ".join(product_keywords[:3])
 
-    # Stage 4: Lint prompts
-    brand_pattern = _build_brand_pattern(brand_names or [])
-    lint_results = lint_prompts(prompts_text, brand_pattern)
+        if len(harvest_keyword) >= 2:
+            try:
+                harvester = QueryHarvester(timeout=5.0)
+                harvested = await harvester.harvest(
+                    harvest_keyword,
+                    count=count,
+                    sources=harvest_sources or ["baidu", "sogou"],
+                )
 
-    # Build results, filtering by quality
-    prompts = []
-    for spec, text, lint_result in zip(specs, prompts_text, lint_results):
-        if lint_result.passed:
-            prompts.append({
-                "text": text,
-                "category": spec.intent,
-                "quality_score": lint_result.score,
-            })
-        else:
-            logger.warning(
-                "prompt_lint_failed",
-                intent=spec.intent,
-                issues=lint_result.issues,
-                score=lint_result.score,
-            )
+                for query_text in harvested:
+                    # Check for brand leakage
+                    brand_pattern = _build_brand_pattern(brand_names or [])
+                    if brand_pattern and brand_pattern.search(query_text):
+                        logger.warning(f"Brand leakage in harvested query: {query_text}")
+                        continue
 
-    # Dedupe
-    prompts = _dedupe_prompts(prompts)
+                    real_queries.append({
+                        "text": query_text,
+                        "category": _infer_intent_from_query(query_text),
+                        "quality_score": 0.95,  # High score for real user queries
+                        "source": "harvested",
+                    })
+                    real_query_texts.add(query_text)
+
+                logger.info(f"Harvested {len(real_queries)} real queries for '{harvest_keyword}'")
+
+            except Exception as e:
+                logger.warning(f"Query harvest failed: {e}")
+
+    # Calculate how many more prompts we need
+    remaining = max(0, count - len(real_queries))
+
+    # Stage 2 & 3 & 4: Generate template-based prompts for the remainder
+    template_prompts = []
+    if remaining > 0:
+        specs = generate_prompt_specs(remaining, profile)
+        prompts_text = render_prompts(specs, profile)
+
+        brand_pattern = _build_brand_pattern(brand_names or [])
+        lint_results = lint_prompts(prompts_text, brand_pattern)
+
+        for spec, text, lint_result in zip(specs, prompts_text, lint_results):
+            if lint_result.passed and text not in real_query_texts:
+                template_prompts.append({
+                    "text": text,
+                    "category": spec.intent,
+                    "quality_score": lint_result.score,
+                    "source": "template",
+                })
+            else:
+                if not lint_result.passed:
+                    logger.warning(
+                        "prompt_lint_failed",
+                        intent=spec.intent,
+                        issues=lint_result.issues,
+                        score=lint_result.score,
+                    )
+
+    # Combine: prioritized real queries, then templates
+    all_prompts = real_queries + template_prompts
+
+    # Final dedup
+    final_prompts = _dedupe_prompts(all_prompts)
+
+    # Backfill if we still don't have enough (network failures, etc)
+    if len(final_prompts) < count:
+        final_prompts = _backfill_prompts(
+            final_prompts, count, profile, _build_brand_pattern(brand_names or [])
+        )
+
+    return final_prompts[:count]
+
+
+def _infer_intent_from_query(query: str) -> str:
+    """Infer intent category from a harvested query text.
+
+    Real user queries don't come with intent labels, so we infer them.
+    """
+    query_lower = query.lower()
+
+    # Pattern matching for intent inference
+    intent_patterns = {
+        "recommend": [r"推荐", r"怎么选", r"哪个好", r"有什么好", r"买哪个"],
+        "compare": [r"和.*比", r"区别", r"对比", r"差异", r"哪个重要"],
+        "evaluate": [r"值得.*吗", r"好吗", r"怎么样", r"评价", r"如何"],
+        "scenario": [r"用.*场景", r"适合.*吗", r"怎么用", r"在.*情况下"],
+        "problem_solution": [r"怎么解决", r"问题", r"故障", r"修复"],
+        "alternative_finding": [r"替代", r"还有.*吗", r"其他.*选择"],
+        "decision_help": [r"怎么选", r"选.*注意", r"看.*参数"],
+        "regret_avoidance": [r"后悔", r"坑", r"槽点", r"差评"],
+        "performance_specs": [r"速度", r"性能", r"响应", r"能力"],
+    }
+
+    for intent, patterns in intent_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, query):
+                return intent
+
+    # Default to evaluate if no pattern matches
+    return "evaluate"
 
     # Backfill if we lost prompts to deduping or linting
     if len(prompts) < count:

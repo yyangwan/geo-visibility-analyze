@@ -36,8 +36,7 @@ def upgrade() -> None:
             "'recommend', 'compare', 'evaluate', 'scenario', "
             "'problem_solution', 'alternative_finding', 'decision_help', 'regret_avoidance', "
             "'performance_specs'"
-            ") "
-            "GENERATED ALWAYS AS (category) STORED"
+            ")"
         )
     elif dialect_name == "postgresql":
         # PostgreSQL ENUM: create new type, migrate data, drop old type
@@ -63,8 +62,7 @@ def downgrade() -> None:
             "ALTER TABLE prompts "
             "MODIFY COLUMN category ENUM("
             "'recommend', 'compare', 'evaluate', 'scenario'"
-            ") "
-            "GENERATED ALWAYS AS (category) STORED"
+            ")"
         )
     elif dialect_name == "postgresql":
         op.execute("CREATE TYPE prompt_category_old AS ENUM ('recommend', 'compare', 'evaluate', 'scenario')")
