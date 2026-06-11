@@ -6,6 +6,7 @@ These represent real questions users actually ask, not synthetic templates.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -14,14 +15,91 @@ from typing import Any
 import httpx
 from urllib.parse import quote
 
+from .decision_intent_filter import DecisionIntentFilter
+
 logger = logging.getLogger(__name__)
 
 
 class QueryHarvester:
     """Harvest real user search queries from search engines."""
 
-    def __init__(self, timeout: float = 5.0) -> None:
+    def __init__(self, timeout: float = 5.0, max_retries: int = 3) -> None:
         self.timeout = timeout
+        self.max_retries = max_retries
+
+    async def _fetch_with_retry(
+        self,
+        url: str,
+        params: dict | None = None,
+        source_name: str = "unknown",
+    ) -> httpx.Response | None:
+        """Fetch with retry logic for transient errors.
+
+        Args:
+            url: The URL to fetch
+            params: Query parameters
+            source_name: Name of the source (for logging)
+
+        Returns:
+            Response object or None if all retries exhausted
+        """
+        last_error = None
+
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.get(url, params=params, follow_redirects=True)
+
+                    # Log success on retry
+                    if attempt > 0:
+                        logger.info(
+                            f"{source_name} succeeded on attempt {attempt + 1}",
+                            extra={"source": source_name, "attempt": attempt + 1},
+                        )
+
+                    return resp
+
+            except httpx.TimeoutException as e:
+                last_error = e
+                logger.warning(
+                    f"{source_name} timeout (attempt {attempt + 1}/{self.max_retries})",
+                    extra={"source": source_name, "attempt": attempt + 1},
+                )
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(2**attempt)  # Exponential backoff
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    last_error = e
+                    logger.warning(
+                        f"{source_name} rate limited (attempt {attempt + 1})",
+                        extra={"source": source_name, "status": 429},
+                    )
+                    if attempt < self.max_retries - 1:
+                        # Longer backoff for rate limiting
+                        await asyncio.sleep(5 + (5 * attempt))
+                else:
+                    # Non-retryable HTTP error
+                    logger.error(
+                        f"{source_name} HTTP {e.response.status_code}: not retrying",
+                        extra={"source": source_name, "status": e.response.status_code},
+                    )
+                    return None
+
+            except Exception as e:
+                # Unexpected error - don't retry
+                logger.error(
+                    f"{source_name} unexpected error: {e}",
+                    extra={"source": source_name, "error": str(e)},
+                )
+                return None
+
+        # All retries exhausted
+        logger.error(
+            f"{source_name} failed after {self.max_retries} attempts",
+            extra={"source": source_name, "attempts": self.max_retries, "last_error": str(last_error)},
+        )
+        return None
 
     async def from_baidu(self, keyword: str, count: int = 10) -> list[str]:
         """Fetch query suggestions from Baidu autocomplete.
@@ -41,8 +119,9 @@ class QueryHarvester:
             encoded = quote(keyword.encode('gb2312'))
             url = f"https://suggestion.baidu.com/su?wd={encoded}&cb=window.baidu.sug"
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(url, follow_redirects=True)
+            resp = await self._fetch_with_retry(url, source_name="baidu")
+            if resp is None:
+                return []
 
             # Strip JSONP wrapper: window.baidu.sug({...});
             json_str = resp.text.replace('window.baidu.sug(', '').rstrip(');')
@@ -96,8 +175,9 @@ class QueryHarvester:
                 "keyword": keyword,
             }
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(url, params=params, follow_redirects=True)
+            resp = await self._fetch_with_retry(url, params=params, source_name="sogou")
+            if resp is None:
+                return []
 
             data = resp.json()
             suggestions = data.get("sugg", [])
@@ -137,8 +217,9 @@ class QueryHarvester:
                 "mkt": "zh-CN",  # Chinese market
             }
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(url, params=params, follow_redirects=True)
+            resp = await self._fetch_with_retry(url, params=params, source_name="bing")
+            if resp is None:
+                return []
 
             data = resp.json()
             if not isinstance(data, list) or len(data) < 2:
@@ -180,6 +261,7 @@ class QueryHarvester:
         keyword: str,
         count: int = 10,
         sources: list[str] | None = None,
+        apply_intent_filter: bool = True,
     ) -> list[str]:
         """Harvest queries from multiple search engines.
 
@@ -188,9 +270,10 @@ class QueryHarvester:
             count: Target number of unique queries to return
             sources: List of sources to try ['baidu', 'sogou', 'bing'],
                      defaults to ['baidu', 'sogou']
+            apply_intent_filter: Whether to apply decision intent filtering (default: True)
 
         Returns:
-            Deduplicated, quality-filtered query strings
+            Deduplicated, quality-filtered, intent-filtered query strings
         """
         if sources is None:
             sources = ['baidu', 'sogou']
@@ -218,6 +301,19 @@ class QueryHarvester:
         # Post-process
         unique = self._dedupe(all_results)
         filtered = self._filter_quality(unique)
+
+        # Apply decision intent filtering if enabled
+        if apply_intent_filter:
+            intent_filter = DecisionIntentFilter()
+            filtered = intent_filter.filter_batch(filtered)
+            logger.info(
+                "intent_filter_applied",
+                extra={
+                    "keyword": keyword,
+                    "before_count": len(unique),
+                    "after_count": len(filtered),
+                },
+            )
 
         return filtered[:count]
 
