@@ -7,17 +7,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.audits import router as audits_router
 from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
+from app.api.integration import router as integration_router
 from app.api.platforms import router as platforms_router
 from app.api.prompts import router as prompts_router
 from app.api.reports import router as reports_router
 from app.api.schedules import router as schedules_router
-from app.api.integration import router as integration_router
 from app.api.strategic import router as strategic_router
 from app.api.suggestions import router as suggestions_router
 from app.api.trends import router as trends_router
 from app.config import settings
 from app.logging_config import get_logger, setup_logging
 from app.middleware import RequestLoggingMiddleware
+from app.models.models import Base
 
 # Initialize structured logging
 debug = os.getenv("AISCOPE_DEBUG", "0") == "1"
@@ -25,8 +26,8 @@ setup_logging(debug=debug)
 logger = get_logger("main")
 
 app = FastAPI(
-    title="智见",
-    description="AI搜索可见性分析平台",
+    title="geo-visibility-analyze",
+    description="AI visibility analysis platform",
     version="0.1.0",
 )
 
@@ -59,6 +60,7 @@ async def startup():
     logger.info("upgrade_done")
     await _recover_orphan_audits()
     from app.services.scheduler import start_scheduler
+
     logger.info("scheduler_imported")
     start_scheduler()
     logger.info("scheduler_started")
@@ -68,6 +70,7 @@ async def startup():
 async def shutdown():
     logger.info("stopping_app")
     from app.services.scheduler import stop_scheduler
+
     stop_scheduler()
 
 
@@ -75,19 +78,32 @@ def _run_upgrade_sync():
     """Run Alembic upgrade synchronously."""
     from alembic import command
     from alembic.config import Config
-    from alembic.script import ScriptDirectory
     from alembic.migration import MigrationContext
-    from sqlalchemy import create_engine
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine, inspect
 
     db_url = settings.database_url.replace("+aiomysql", "+pymysql")
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("script_location", "alembic")
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
 
-    # Check if already at head — skip upgrade if so
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    required_tables = {"audits", "prompts", "platform_response_records"}
+    if not required_tables.issubset(existing_tables):
+        logger.warning(
+            "db_bootstrap_required",
+            missing_tables=sorted(required_tables - existing_tables),
+        )
+        Base.metadata.create_all(engine)
+        command.stamp(alembic_cfg, "head")
+        engine.dispose()
+        return
+
+    # Check if already at head - skip upgrade if so
     script = ScriptDirectory.from_config(alembic_cfg)
     head = script.get_current_head()
-    engine = create_engine(db_url)
     with engine.connect() as conn:
         ctx = MigrationContext.configure(conn)
         current = ctx.get_current_revision()
@@ -121,7 +137,7 @@ async def _recover_orphan_audits():
         running_audits = running_result.scalars().all()
         for audit in running_audits:
             audit.status = QueryStatus.FAILED
-            audit.error_message = 'Server restarted — audit cancelled'
+            audit.error_message = "Server restarted - audit cancelled"
             audit.completed_at = datetime.now(timezone.utc)
         if running_audits:
             await db.commit()
