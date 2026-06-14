@@ -53,6 +53,7 @@ def _serialize_audit(audit: Audit) -> dict:
         "stage_started_at": _dt(audit.stage_started_at),
         "stage_updated_at": _dt(audit.stage_updated_at),
         "last_heartbeat_at": _dt(audit.last_heartbeat_at),
+        "analysis_run_id": audit.analysis_run_id,
         "attempt_count": audit.attempt_count,
         "error_code": audit.error_code,
         "error_message": audit.error_message,
@@ -181,6 +182,7 @@ async def get_audit_results(
     results = result.scalars().all()
 
     # Bulk load prompts to avoid N+1
+    # Note: We include deleted prompts for historical audit visibility
     prompt_ids = {r.prompt_id for r in results}
 
     prompts_result = await db.execute(

@@ -1,33 +1,81 @@
 """DeepSeek platform adapter.
 
-Uses DashScope (Alibaba Cloud Bailian) to host DeepSeek models with
-web search support via enable_search parameter. This gives the same
-DeepSeek model quality but with real-time internet access.
-
-Config (in .env):
-  AISCOPE_DEEPSEEK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-  AISCOPE_DEEPSEEK_API_KEY=<dashscope-api-key>
-  AISCOPE_DEEPSEEK_MODEL=deepseek-v3   (or deepseek-v3.1, deepseek-r1, etc.)
-
-Note: DeepSeek official API (api.deepseek.com) does NOT support web search.
+Uses the official DeepSeek API for the default request path and keeps the
+web-capture adapter as an opt-in mode for comparison/debugging.
 """
 
+from app.adapters.deepseek_web import DeepSeekWebAdapter
 from app.adapters.openai_compat import OpenAICompatAdapter
 from app.config import settings
+from app.logging_config import get_logger
+
+logger = get_logger("deepseek")
 
 
 class DeepSeekAdapter(OpenAICompatAdapter):
     platform_name = "deepseek"
-    search_enabled = True
+    search_enabled = False
+    api_model = "deepseek-v4-flash"
 
     def __init__(self):
         self.api_key = settings.deepseek_api_key
-        self.base_url = settings.deepseek_base_url
-        self.model = settings.deepseek_model
+        self.base_url = "https://api.deepseek.com"
+        self.model = self.api_model
         super().__init__()
+        self._web_adapter = DeepSeekWebAdapter()
+        self._web_adapter.set_platform_config(self.get_platform_config())
+
+    def set_platform_config(self, config: dict) -> None:
+        super().set_platform_config(config)
+        self._web_adapter.set_platform_config(config)
+
+    def set_runtime_context(self, context: dict | None) -> None:
+        super().set_runtime_context(context)
+        self._web_adapter.set_runtime_context(context)
+
+    def _capture_mode(self) -> str:
+        config = self.get_platform_config()
+        capture_mode = config.get("capture_mode")
+        if not capture_mode:
+            capture_mode = config.get("capture", {}).get("mode")
+        return str(capture_mode or "api_compat").lower()
+
+    async def query(self, prompts: list[str]):
+        if self._capture_mode() == "official_web":
+            try:
+                return await self._web_adapter.query(prompts)
+            except Exception as exc:
+                logger.warning(
+                    "deepseek_web_capture_failed_falling_back",
+                    error=str(exc),
+                )
+        return await super().query(prompts)
+
+    async def health_check(self) -> bool:
+        if self._capture_mode() == "official_web":
+            try:
+                if await self._web_adapter.health_check():
+                    return True
+            except Exception as exc:
+                logger.warning(
+                    "deepseek_web_health_check_failed_falling_back",
+                    error=str(exc),
+                )
+        return await super().health_check()
 
     def _build_request_body(self, prompt: str) -> dict:
+        """Build request body for the official DeepSeek API.
+
+        The official API follows the standard chat/completions shape and does
+        not use the web-search envelope that the web capture path relies on.
+        """
         body = super()._build_request_body(prompt)
-        body["enable_search"] = True
-        body["search_options"] = {"forced_search": True}
+
+        # The public API is stateless and does not expose DeepSeek web-search
+        # parameters, so strip any search envelope inherited from generic
+        # OpenAI-compatible defaults or platform config.
+        body.pop("enable_search", None)
+        body.pop("search_options", None)
+        body.pop("tools", None)
+
         return body

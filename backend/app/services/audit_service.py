@@ -10,11 +10,13 @@ Orchestrates the full audit pipeline:
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy import update
@@ -39,6 +41,7 @@ from app.models.models import (
 )
 from app.services.audit_events import PlatformEvent, publish
 from app.services.detect import detect_mentions
+from app.services.platform_config_service import get_platform_config
 from app.services.source_extraction import extract_sources
 from app.utils.timezone import utcnow
 
@@ -95,6 +98,27 @@ async def _next_platform_attempt_no(
     return int(result.scalar_one() or 0) + 1
 
 
+def _build_source_snapshot_hash(
+    citations: list[dict] | None,
+    search_metadata: dict | None,
+    request_params: dict | None,
+) -> str:
+    """Build a stable digest for the source snapshot behind a platform answer."""
+    snapshot = {
+        "citations": citations or [],
+        "search_metadata": search_metadata or {},
+        "request_params": request_params or {},
+    }
+    payload = json.dumps(
+        snapshot,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 async def _append_event(
     db: AsyncSession,
     audit: Audit,
@@ -142,7 +166,14 @@ async def _upsert_platform_response_record(
     finish_reason: str,
     search_enabled: bool,
     error: str | None,
+    raw_response: dict | None = None,
+    raw_response_text: str | None = None,
+    search_metadata: dict | None = None,
+    request_params: dict | None = None,
+    parse_error: str | None = None,
+    source_snapshot_hash: str | None = None,
 ) -> PlatformResponseRecord:
+    """Upsert a platform response record with raw response archiving (Issue 1.2, 4.1)."""
     prr = await _get_platform_response_record(db, audit_id, prompt_id, platform)
     if prr is None:
         prr = PlatformResponseRecord(
@@ -157,6 +188,13 @@ async def _upsert_platform_response_record(
             finish_reason=finish_reason,
             search_enabled=search_enabled,
             error=error,
+            # Issue 1.2: Raw response archiving fields
+            raw_response=raw_response,
+            raw_response_text=raw_response_text,
+            search_metadata=search_metadata,
+            request_params=request_params,
+            parse_error=parse_error,
+            source_snapshot_hash=source_snapshot_hash,
         )
         db.add(prr)
     else:
@@ -168,6 +206,13 @@ async def _upsert_platform_response_record(
         prr.finish_reason = finish_reason
         prr.search_enabled = search_enabled
         prr.error = error
+        # Issue 1.2: Update raw response archiving fields
+        prr.raw_response = raw_response
+        prr.raw_response_text = raw_response_text
+        prr.search_metadata = search_metadata
+        prr.request_params = request_params
+        prr.parse_error = parse_error
+        prr.source_snapshot_hash = source_snapshot_hash
     await db.flush()
     return prr
 
@@ -230,6 +275,7 @@ async def claim_audit(db: AsyncSession, audit_id: int) -> Audit | None:
     another worker, returns None.
     """
     now = utcnow()
+    analysis_run_id = uuid4().hex
     result = await db.execute(
         update(Audit)
         .where(Audit.id == audit_id)
@@ -241,6 +287,7 @@ async def claim_audit(db: AsyncSession, audit_id: int) -> Audit | None:
             stage_started_at=None,
             stage_updated_at=now,
             last_heartbeat_at=now,
+            analysis_run_id=analysis_run_id,
             attempt_count=Audit.attempt_count + 1,
             error_code=None,
             error_message=None,
@@ -387,7 +434,12 @@ async def run_audit(audit_id: int) -> None:
 
 async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     """Core audit execution logic."""
-    result = await db.execute(select(Prompt).where(Prompt.project_id == audit.project_id))
+    result = await db.execute(
+        select(Prompt).where(
+            Prompt.project_id == audit.project_id,
+            Prompt.deleted_at.is_(None)
+        )
+    )
     prompts = result.scalars().all()
     if not prompts:
         audit.status = QueryStatus.FAILED
@@ -413,9 +465,25 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
         await db.commit()
         return
 
+    if not audit.analysis_run_id:
+        audit.analysis_run_id = uuid4().hex
+        await db.flush()
+
     prompt_texts = [p.text for p in prompts]
     platforms = audit.platforms_json or []
     adapters = get_adapters(platforms)
+
+    # Issue 2.1: Load platform configs and inject into adapters
+    for adapter in adapters:
+        config = await get_platform_config(db, adapter.platform_name)
+        adapter.set_platform_config(config)
+        runtime_context = {
+            "analysis_run_id": audit.analysis_run_id,
+            "audit_id": audit.id,
+            "project_id": audit.project_id,
+        }
+        if hasattr(adapter, "set_runtime_context"):
+            adapter.set_runtime_context(runtime_context)
 
     query_stage = await _start_stage(
         db,
@@ -591,6 +659,17 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
                 resp.finish_reason,
                 resp.search_enabled,
                 resp.error_message if not resp.success else None,
+                # Issue 4.1: Raw response archiving
+                raw_response=resp.raw_response,
+                raw_response_text=resp.raw_response_text,
+                search_metadata=resp.search_metadata,
+                request_params=resp.request_params,
+                parse_error=resp.parse_error,
+                source_snapshot_hash=_build_source_snapshot_hash(
+                    resp.citations,
+                    resp.search_metadata,
+                    resp.request_params,
+                ),
             )
             response_records[(resp.prompt, platform_name)] = prr
 

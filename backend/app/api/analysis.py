@@ -45,6 +45,7 @@ async def get_audit_analysis(
     )
     prr_map = {p.id: p for p in prr_result.scalars().all()}
 
+    # Load prompts for historical context (include deleted)
     prompt_ids = {prr.prompt_id for prr in prr_map.values()}
     prompt_result = await db.execute(
         select(Prompt).where(Prompt.id.in_(prompt_ids))

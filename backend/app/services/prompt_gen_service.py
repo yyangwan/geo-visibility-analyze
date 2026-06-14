@@ -1,4 +1,4 @@
-"""Prompt auto-generation service - 5-Stage Pipeline
+﻿"""Prompt auto-generation service - 5-Stage Pipeline
 
 Follows GeniLink framework for high-quality prompt generation:
 Stage 1: buildProductProfile - Extract structured profile from inputs
@@ -16,11 +16,16 @@ authentic user questions that real people actually search for.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
+
+import httpx
+
+from app.config import settings
 
 from .query_harvester import harvest_queries, QueryHarvester
 
@@ -144,58 +149,58 @@ _GENERIC_SUBJECTS = {
 # 4. 关注实际体验,而非抽象对比
 _QUESTION_TEMPLATES = {
     "recommend": [
-        "{persona}用{subject}，预算{budget}以内，有推荐的吗？",
-        "{scenario}用{subject}，选的时候主要看什么？",
-        "想买个{factor}好点的{subject}，怎么选更合适？",
-        "新手买{subject}有什么需要注意的吗？",
+        "{persona}用{subject_term}，预算{budget}以内，有推荐的吗？",
+        "{scenario}用{subject_term}，选的时候主要看什么？",
+        "想买个{factor}好点的{subject_term}，怎么选更合适？",
+        "新手买{subject_term}有什么需要注意的吗？",
     ],
     "compare": [
-        "{scenario}用{subject}，{factor}和{alt_view}哪个更重要？",
-        "{subject}的{factor_a}和{factor_b}，哪个更影响实际使用？",
-        "{persona}觉得{subject}好用吗，还是用{alt_view}就够了？",
-        "{factor_a}和{factor_b}都想要，{subject}该怎么选？",
+        "{scenario}用{subject_term}，{factor}和{alt_view}哪个更重要？",
+        "{subject_term}的{factor_a}和{factor_b}，哪个更影响实际使用？",
+        "{persona}觉得{subject_term}好用吗，还是用{alt_view}就够了？",
+        "{factor_a}和{factor_b}都想要，{subject_term}该怎么选？",
     ],
     "evaluate": [
-        "{subject}值得买吗？和{alt_view}比有什么优势？",
-        "{scenario}用{subject}，实际体验能好多少？",
-        "{subject}跟市面上常用的比，差别大吗？",
-        "{subject}哪些卖点是真的有用，哪些是噱头？",
+        "{subject_term}值得买吗？和{alt_view}比有什么优势？",
+        "{scenario}用{subject_term}，实际体验能好多少？",
+        "{subject_term}跟市面上常用的比，差别大吗？",
+        "{subject_term}哪些卖点是真的有用，哪些是噱头？",
     ],
     "scenario": [
-        "{scenario}想用{subject}，有什么需要注意的吗？",
-        "{scenario}用{subject}怎么最顺手？",
-        "{scenario}这种情况下，{subject}有什么特别的用法吗？",
-        "{persona}平时用{subject}合适吗？",
+        "{scenario}想用{subject_term}，有什么需要注意的吗？",
+        "{scenario}用{subject_term}怎么最顺手？",
+        "{scenario}这种情况下，{subject_term}有什么特别的用法吗？",
+        "{persona}平时用{subject_term}合适吗？",
     ],
     "problem_solution": [
-        "{scenario}用{subject}经常出问题吗？怎么解决比较好？",
-        "遇到{factor}问题，{subject}能帮上忙吗？",
-        "{scenario}经常{description_hint}，{subject}能缓解吗？",
-        "{scenario}用{subject}在{factor}方面体验如何？",
+        "{scenario}用{subject_term}经常出问题吗？怎么解决比较好？",
+        "遇到{factor}问题，{subject_term}能帮上忙吗？",
+        "{scenario}经常{description_hint}，{subject_term}能缓解吗？",
+        "{scenario}用{subject_term}在{factor}方面体验如何？",
     ],
     "alternative_finding": [
-        "除了常见的，{subject}还有什么好用的替代吗？",
-        "{subject}跟常用的比，差别大吗？",
-        "不想遇到{description_hint}，{subject}有更好的选择吗？",
-        "{scenario}用{subject}，有什么小众但好用的替代吗？",
+        "除了常见的，{subject_term}还有什么好用的替代吗？",
+        "{subject_term}跟常用的比，差别大吗？",
+        "不想遇到{description_hint}，{subject_term}有更好的选择吗？",
+        "{scenario}用{subject_term}，有什么小众但好用的替代吗？",
     ],
     "decision_help": [
-        "{persona}选{subject}容易遇到哪些坑？",
-        "{subject}在{factor_a}和{factor_b}之间，实际差别大吗？",
-        "买{subject}时，{factor}值得多花钱吗？",
-        "{scenario}用{subject}，主要看哪些参数？哪些可以不用管？",
+        "{persona}选{subject_term}容易遇到哪些坑？",
+        "{subject_term}在{factor_a}和{factor_b}之间，实际差别大吗？",
+        "买{subject_term}时，{factor}值得多花钱吗？",
+        "{scenario}用{subject_term}，主要看哪些参数？哪些可以不用管？",
     ],
     "regret_avoidance": [
-        "买了{subject}最常见后悔的原因是什么？",
-        "{scenario}用{subject}有什么常见槽点？",
-        "{persona}买{subject}前经常忽略什么问题？",
-        "{subject}在{factor}方面差评多，主要因为什么？",
+        "买了{subject_term}最常见后悔的原因是什么？",
+        "{scenario}用{subject_term}有什么常见槽点？",
+        "{persona}买{subject_term}前经常忽略什么问题？",
+        "{subject_term}在{factor}方面差评多，主要因为什么？",
     ],
     "performance_specs": [
-        "{subject}实际用起来，{factor}表现怎么样？",
-        "{scenario}用{subject}，{factor}能达到什么程度？",
-        "{subject}的{factor_a}和{factor_b}，实际差别大吗？",
-        "专业用户挑{subject}时，主要看哪些{factor}指标？",
+        "{subject_term}实际用起来，{factor}表现怎么样？",
+        "{scenario}用{subject_term}，{factor}能达到什么程度？",
+        "{subject_term}的{factor_a}和{factor_b}，实际差别大吗？",
+        "专业用户挑{subject_term}时，主要看哪些{factor}指标？",
     ],
 }
 
@@ -235,18 +240,24 @@ class ProductProfile:
         """Convert to context dict for template rendering."""
         all_factors = self.focus_factors + _DECISION_FACTORS
         all_metrics = self.performance_metrics + _PERFORMANCE_METRICS
+        usable_factors = [factor for factor in all_factors if not _is_subject_like(factor, self.subject)]
+        if len(usable_factors) < 2:
+            usable_factors = all_factors
+        subject_text = _sanitize_profile_text(self.subject, None)
+        subject_term = _choose_subject_term(subject_text, self.category)
 
         return {
-            "subject": self.subject,
+            "subject": subject_text,
+            "subject_term": subject_term,
             # Note: industry removed from fallback to avoid leaking classification labels into prompts
             # Real users don't include "企业服务" or "电商" in their natural queries
-            "category": self.category or "相关产品",
+            "category": _strip_industry_terms(self.category) if self.category else "相关产品",
             "scenario": self.scenarios[0] if self.scenarios else _SCENARIOS[0],
             "persona": self.personas[0] if self.personas else _PERSONAS[0],
             "budget": _BUDGETS[0],
-            "factor": self.focus_factors[0] if self.focus_factors else all_factors[0],
-            "factor_a": self.focus_factors[0] if self.focus_factors else all_factors[0],
-            "factor_b": self.focus_factors[1] if len(self.focus_factors) > 1 else all_factors[1],
+            "factor": usable_factors[0] if usable_factors else all_factors[0],
+            "factor_a": usable_factors[0] if usable_factors else all_factors[0],
+            "factor_b": usable_factors[1] if len(usable_factors) > 1 else all_factors[1],
             "alt_view": _ALT_VIEWS[0],
             "perf_metric": self.performance_metrics[0] if self.performance_metrics else all_metrics[0],
             "perf_metric_a": self.performance_metrics[0] if self.performance_metrics else all_metrics[0],
@@ -287,6 +298,77 @@ def _strip_brand_names(text: str, brand_pattern: re.Pattern[str] | None) -> str:
     return stripped.strip(" -—:：;；,，")
 
 
+_INDUSTRY_TERMS = (
+    "电商",
+    "企业服务",
+    "B2B",
+    "B2C",
+    "ToB",
+    "ToC",
+    "行业",
+    "领域",
+    "垂直",
+)
+
+
+def _strip_industry_terms(text: str) -> str:
+    stripped = text
+    for term in _INDUSTRY_TERMS:
+        stripped = stripped.replace(term, "")
+    stripped = re.sub(r"\s+", " ", stripped)
+    return stripped.strip()
+
+
+def _sanitize_profile_text(text: str, brand_pattern: re.Pattern[str] | None) -> str:
+    return _strip_industry_terms(_strip_brand_names(text, brand_pattern))
+
+
+def _is_subject_like(text: str, subject: str) -> bool:
+    normalized = _normalize_whitespace(text)
+    subject_normalized = _normalize_whitespace(subject)
+    if not normalized or not subject_normalized:
+        return False
+
+    compact = re.sub(r"[\W_]+", "", normalized)
+    subject_compact = re.sub(r"[\W_]+", "", subject_normalized)
+    if not compact or not subject_compact:
+        return False
+    if compact == subject_compact:
+        return True
+    if compact in subject_compact or subject_compact in compact:
+        return True
+
+    if len(compact) <= 6 and len(subject_compact) <= 12:
+        overlap = len(set(compact) & set(subject_compact))
+        if overlap >= max(2, min(len(set(compact)), len(set(subject_compact))) - 1):
+            return True
+
+    return False
+
+
+def _is_generic_surface(text: str) -> bool:
+    normalized = _normalize_whitespace(text)
+    if not normalized:
+        return True
+    if normalized in _GENERIC_SUBJECTS:
+        return True
+    compact = re.sub(r"[\W_]+", "", normalized)
+    return len(compact) <= 2
+
+
+def _choose_subject_term(subject: str, category: str | None) -> str:
+    subject_text = _normalize_whitespace(subject)
+    category_text = _normalize_whitespace(_strip_industry_terms(category or ""))
+
+    if subject_text and not _is_generic_surface(subject_text):
+        return subject_text
+    if category_text and not _is_generic_surface(category_text):
+        return category_text
+    if subject_text:
+        return subject_text
+    return "这个产品"
+
+
 def _is_generic_subject(value: str) -> bool:
     normalized = _normalize_whitespace(value)
     if not normalized:
@@ -307,24 +389,24 @@ def _choose_subject(
 ) -> str:
     """Pick a brand-free subject for the prompt."""
     candidates = [
-        product_category,
-        industry,
-        project_name,
         product_name,
+        product_category,
+        project_name,
     ]
 
     for raw in candidates:
-        value = _strip_brand_names(raw or "", brand_pattern)
+        value = _sanitize_profile_text(raw or "", brand_pattern)
         if value:
-            if _is_generic_subject(value) and keywords:
-                keyword_phrase = "".join(keywords[:2]).strip()
-                if keyword_phrase:
-                    return f"{value}{keyword_phrase}工具"
+            if any(term in value for term in _INDUSTRY_TERMS):
+                continue
             return value
 
     if keywords:
-        keyword_text = "、".join(_strip_brand_names(k, brand_pattern) for k in keywords[:3])
+        keyword_text = "、".join(
+            _sanitize_profile_text(k, brand_pattern) for k in keywords[:3]
+        )
         keyword_text = keyword_text.strip("、")
+        keyword_text = _strip_industry_terms(keyword_text)
         if keyword_text:
             return keyword_text
 
@@ -388,18 +470,31 @@ def _extract_risk_points(description: str, keywords: list[str]) -> list[str]:
     return risks if risks else _PROBLEM_SCENARIOS[:2]
 
 
-def _extract_focus_factors(description: str, keywords: list[str]) -> list[str]:
-    """Extract decision factors from description and keywords."""
+def _extract_focus_factors(description: str, keywords: list[str], subject: str) -> list[str]:
+    """Extract decision factors from description and keywords.
+
+    Avoid reusing words that are already part of the subject, because that
+    tends to create awkward prompts like "subject 的 subject".
+    """
     factors = []
 
-    # Keywords are often decision factors
+    # Keywords are often decision factors, but skip ones that duplicate the subject.
     for kw in keywords[:5]:
-        if len(kw) >= 2 and len(kw) <= 6:
-            factors.append(kw)
+        normalized = _normalize_whitespace(kw)
+        if len(normalized) < 2 or len(normalized) > 6:
+            continue
+        if _is_subject_like(normalized, subject):
+            continue
+        factors.append(normalized)
 
-    # Add default factors if we don't have enough
-    if len(factors) < 3:
-        factors.extend(_FOCUS_FACTORS[:3 - len(factors)])
+    factors = [factor for factor in factors if not _is_subject_like(factor, subject)]
+
+    # Add defaults until we have enough signal.
+    for default_factor in _FOCUS_FACTORS:
+        if len(factors) >= 3:
+            break
+        if default_factor not in factors:
+            factors.append(default_factor)
 
     return factors[:5]
 
@@ -440,6 +535,12 @@ def build_product_profile(
     """
     keywords = _join_keywords(product_keywords)
     brand_pattern = _build_brand_pattern(brand_names or [])
+    sanitized_keywords = [
+        keyword
+        for keyword in (_sanitize_profile_text(k, brand_pattern) for k in keywords)
+        if keyword
+    ]
+    sanitized_description = _sanitize_profile_text(product_description, brand_pattern)
 
     # Extract subject (brand-free)
     subject = _choose_subject(
@@ -447,18 +548,18 @@ def build_product_profile(
         product_category=product_category,
         industry=industry,
         project_name=project_name,
-        keywords=keywords,
+        keywords=sanitized_keywords,
         brand_pattern=brand_pattern,
     )
 
     # Extract profile elements
-    scenarios = _extract_scenarios(product_description, keywords)
-    personas = _extract_personas(product_description, keywords)
-    risk_points = _extract_risk_points(product_description, keywords)
-    comparison_objects = [product_category] if product_category else []
-    focus_factors = _extract_focus_factors(product_description, keywords)
-    performance_metrics = _extract_performance_metrics(product_description, keywords)
-    description_hint = _strip_brand_names(product_description, brand_pattern)
+    scenarios = _extract_scenarios(sanitized_description, sanitized_keywords)
+    personas = _extract_personas(sanitized_description, sanitized_keywords)
+    risk_points = _extract_risk_points(sanitized_description, sanitized_keywords)
+    comparison_objects = [_sanitize_profile_text(product_category, brand_pattern)] if product_category else []
+    focus_factors = _extract_focus_factors(sanitized_description, sanitized_keywords, subject)
+    performance_metrics = _extract_performance_metrics(sanitized_description, sanitized_keywords)
+    description_hint = sanitized_description
 
     return ProductProfile(
         subject=subject,
@@ -678,6 +779,178 @@ def _backfill_prompts(
     return backfilled[:target_count]
 
 
+def _build_harvest_seeds(
+    profile: ProductProfile,
+    *,
+    project_name: str = "",
+    product_category: str = "",
+    product_keywords: list[str] | None = None,
+) -> list[str]:
+    seeds: list[str] = []
+    seen: set[str] = set()
+
+    candidates = [
+        profile.subject,
+        project_name,
+        product_category,
+        *(_join_keywords(product_keywords) if product_keywords else []),
+    ]
+
+    for candidate in candidates:
+        seed = _sanitize_profile_text(candidate or "", None)
+        seed = _normalize_whitespace(seed)
+        if len(seed) < 2:
+            continue
+        if seed in seen:
+            continue
+        seen.add(seed)
+        seeds.append(seed)
+
+    return seeds
+
+
+def _build_prompt_anchors(
+    profile: ProductProfile,
+    *,
+    product_keywords: list[str] | None = None,
+) -> list[str]:
+    anchors: list[str] = []
+    seen: set[str] = set()
+
+    candidates = [
+        profile.subject,
+        profile.category or "",
+        *(_join_keywords(product_keywords) if product_keywords else []),
+    ]
+
+    for candidate in candidates:
+        anchor = _sanitize_profile_text(candidate or "", None)
+        anchor = _normalize_whitespace(anchor)
+        if len(anchor) < 2:
+            continue
+        if _is_generic_subject(anchor):
+            continue
+        if anchor in seen:
+            continue
+        seen.add(anchor)
+        anchors.append(anchor)
+
+    return anchors
+
+
+def _prompt_has_anchor(prompt: str, anchors: list[str]) -> bool:
+    normalized = _normalize_whitespace(prompt)
+    if not normalized:
+        return False
+    return any(anchor and anchor in normalized for anchor in anchors)
+
+
+async def _call_prompt_llm_fill(
+    profile: ProductProfile,
+    needed: int,
+    existing_texts: set[str],
+    anchors: list[str],
+) -> list[dict]:
+    api_key, base_url, model = settings.get_llm_config()
+    if not api_key or needed <= 0 or not anchors:
+        return []
+
+    subject = _sanitize_profile_text(profile.subject, None)
+    subject_term = _choose_subject_term(subject, profile.category)
+    payload = {
+        "subject": subject,
+        "subject_term": subject_term,
+        "category": _strip_industry_terms(profile.category) if profile.category else "相关产品",
+        "scenarios": profile.scenarios[:3],
+        "personas": profile.personas[:3],
+        "focus_factors": profile.focus_factors[:5],
+        "risk_points": profile.risk_points[:3],
+        "description_hint": profile.description_hint[:80],
+        "need_count": needed,
+        "existing_prompts": list(existing_texts)[:10],
+    }
+
+    system_prompt = (
+        "你是一个中文问题改写器。"
+        "你的任务是生成真实用户会问的搜索/提问句，而不是营销文案。"
+        "要求："
+        "1. 只输出 JSON 数组，每个元素都是字符串。"
+        "2. 句子要自然、口语化、像真实用户。"
+        "3. 不要使用“这款”“该款”“这类”这类指代词。"
+        "4. 不要包含品牌名、行业名、分类名或生硬的拼接词。"
+        "5. 不要重复已有问题，尽量覆盖不同意图。"
+        "6. 不要输出解释、前后缀、代码块或多余文本。"
+    )
+    user_prompt = json.dumps(payload, ensure_ascii=False)
+
+    try:
+        async with httpx.AsyncClient(timeout=45, proxy=None) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.4,
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+    except Exception as exc:
+        logger.warning(f"prompt_llm_fill_failed: {exc}")
+        return []
+
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning(f"prompt_llm_fill_invalid_json: {content[:200]}")
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    results: list[dict] = []
+    brand_pattern = _build_brand_pattern([])
+    for item in parsed:
+        text = ""
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = str(item.get("text", "")).strip()
+
+        text = _normalize_whitespace(text)
+        if not text or text in existing_texts:
+            continue
+        if not _prompt_has_anchor(text, anchors):
+            continue
+
+        lint_result = lint_prompt(text, brand_pattern)
+        if not lint_result.passed:
+            continue
+
+        results.append({
+            "text": text,
+            "category": _infer_intent_from_query(text),
+            "quality_score": min(0.98, max(0.7, lint_result.score)),
+            "source": "llm",
+        })
+        existing_texts.add(text)
+        if len(results) >= needed:
+            break
+
+    return results
+
+
 
 # ---------------------------------------------------------------------------
 # Main Pipeline
@@ -727,43 +1000,65 @@ async def generate_prompts(
         brand_names=brand_names,
     )
 
+    brand_pattern = _build_brand_pattern(brand_names or [])
+    prompt_anchors = _build_prompt_anchors(
+        profile,
+        product_keywords=product_keywords,
+    )
+
     # Stage 1.5: Harvest real user queries (NEW)
     real_queries = []
     real_query_texts = set()  # For deduping
 
     if use_real_queries:
-        # Use the cleaned subject for harvesting (brand-free)
-        harvest_keyword = profile.subject
-        if len(harvest_keyword) < 2:
-            # Fallback to keywords if subject is too short
-            if product_keywords:
-                harvest_keyword = " ".join(product_keywords[:3])
+        harvest_seeds = _build_harvest_seeds(
+            profile,
+            project_name=project_name,
+            product_category=product_category,
+            product_keywords=product_keywords,
+        )
 
-        if len(harvest_keyword) >= 2:
+        if harvest_seeds:
             try:
                 harvester = QueryHarvester(timeout=5.0)
-                harvested = await harvester.harvest(
-                    harvest_keyword,
-                    count=count,
-                    sources=harvest_sources or ["baidu", "sogou"],
+                sources = harvest_sources or ["baidu", "sogou", "bing"]
+
+                for harvest_keyword in harvest_seeds:
+                    if len(real_queries) >= count:
+                        break
+
+                    try:
+                        harvested = await harvester.harvest(
+                            harvest_keyword,
+                            count=max(4, count),
+                            sources=sources,
+                        )
+
+                        for query_text in harvested:
+                            if brand_pattern and brand_pattern.search(query_text):
+                                logger.warning(f"Brand leakage in harvested query: {query_text}")
+                                continue
+                            if query_text in real_query_texts:
+                                continue
+
+                            real_queries.append({
+                                "text": query_text,
+                                "category": _infer_intent_from_query(query_text),
+                                "quality_score": 0.95,
+                                "source": "harvested",
+                            })
+                            real_query_texts.add(query_text)
+
+                            if len(real_queries) >= count:
+                                break
+                    except Exception as seed_error:
+                        logger.warning(
+                            f"Query harvest failed for seed '{harvest_keyword}': {seed_error}"
+                        )
+
+                logger.info(
+                    f"Harvested {len(real_queries)} real queries for seeds: {', '.join(harvest_seeds[:5])}"
                 )
-
-                for query_text in harvested:
-                    # Check for brand leakage
-                    brand_pattern = _build_brand_pattern(brand_names or [])
-                    if brand_pattern and brand_pattern.search(query_text):
-                        logger.warning(f"Brand leakage in harvested query: {query_text}")
-                        continue
-
-                    real_queries.append({
-                        "text": query_text,
-                        "category": _infer_intent_from_query(query_text),
-                        "quality_score": 0.95,  # High score for real user queries
-                        "source": "harvested",
-                    })
-                    real_query_texts.add(query_text)
-
-                logger.info(f"Harvested {len(real_queries)} real queries for '{harvest_keyword}'")
 
             except Exception as e:
                 logger.warning(f"Query harvest failed: {e}")
@@ -771,13 +1066,23 @@ async def generate_prompts(
     # Calculate how many more prompts we need
     remaining = max(0, count - len(real_queries))
 
-    # Stage 2 & 3 & 4: Generate template-based prompts for the remainder
+    # Stage 1.6: Fill the gap with LLM-generated natural questions when available.
+    llm_prompts = []
+    if remaining > 0:
+        llm_prompts = await _call_prompt_llm_fill(
+            profile,
+            remaining,
+            real_query_texts,
+            prompt_anchors,
+        )
+
+    remaining = max(0, count - len(real_queries) - len(llm_prompts))
+
+    # Stage 2 & 3 & 4: Template-based prompts as the last fallback.
     template_prompts = []
     if remaining > 0:
         specs = generate_prompt_specs(remaining, profile)
         prompts_text = render_prompts(specs, profile)
-
-        brand_pattern = _build_brand_pattern(brand_names or [])
         lint_results = lint_prompts(prompts_text, brand_pattern)
 
         for spec, text, lint_result in zip(specs, prompts_text, lint_results):
@@ -788,17 +1093,13 @@ async def generate_prompts(
                     "quality_score": lint_result.score,
                     "source": "template",
                 })
-            else:
-                if not lint_result.passed:
-                    logger.warning(
-                        "prompt_lint_failed",
-                        intent=spec.intent,
-                        issues=lint_result.issues,
-                        score=lint_result.score,
-                    )
+            elif not lint_result.passed:
+                logger.warning(
+                    f"prompt_lint_failed intent={spec.intent} issues={lint_result.issues} score={lint_result.score}"
+                )
 
-    # Combine: prioritized real queries, then templates
-    all_prompts = real_queries + template_prompts
+    # Combine: prioritized real queries, then LLM fills, then templates.
+    all_prompts = real_queries + llm_prompts + template_prompts
 
     # Final dedup
     final_prompts = _dedupe_prompts(all_prompts)
@@ -845,3 +1146,4 @@ def _infer_intent_from_query(query: str) -> str:
         prompts = _backfill_prompts(prompts, count, profile, brand_pattern)
 
     return prompts[:count]
+

@@ -47,6 +47,7 @@ class AuditOut(BaseModel):
     stage_started_at: datetime | None = None
     stage_updated_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
+    analysis_run_id: str | None = None
     attempt_count: int = 0
     error_code: str | None = None
     error_message: str | None = None

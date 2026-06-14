@@ -1,6 +1,6 @@
 """Prompt API endpoints — manage AI query prompts per project."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,8 +8,9 @@ from app.api.access import require_project_scope
 from app.api.auth import get_current_user
 from app.api.schemas import PromptCreate, PromptOut, PromptGenerateRequest
 from app.database import get_db
-from app.models.models import Prompt
+from app.models.models import AuditPlatformRun, PlatformResponseRecord, Prompt, QueryResult
 from app.services.prompt_gen_service import generate_prompts
+from app.utils.timezone import utcnow
 
 router = APIRouter()
 
@@ -39,9 +40,13 @@ async def list_prompts(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """List all active (non-deleted) prompts for a project."""
     require_project_scope(current_user, project_id)
     result = await db.execute(
-        select(Prompt).where(Prompt.project_id == project_id)
+        select(Prompt).where(
+            Prompt.project_id == project_id,
+            Prompt.deleted_at.is_(None)
+        )
     )
     return result.scalars().all()
 
@@ -53,12 +58,49 @@ async def delete_prompt(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Soft delete a prompt by setting deleted_at timestamp.
+
+    Checks for audit history references before deletion. If references exist,
+    performs soft delete (sets deleted_at). Otherwise, could hard delete.
+    For consistency, we always use soft delete.
+    """
     require_project_scope(current_user, project_id)
     prompt = await db.get(Prompt, prompt_id)
     if not prompt or prompt.project_id != project_id:
         raise HTTPException(status_code=404, detail="Prompt not found")
-    await db.delete(prompt)
+
+    # Check for audit history references
+    audit_ref_count = 0
+
+    # Check AuditPlatformRun
+    apr_result = await db.execute(
+        select(AuditPlatformRun.id).where(AuditPlatformRun.prompt_id == prompt_id).limit(1)
+    )
+    if apr_result.scalar_one_or_none() is not None:
+        audit_ref_count += 1
+
+    # Check PlatformResponseRecord
+    prr_result = await db.execute(
+        select(PlatformResponseRecord.id).where(PlatformResponseRecord.prompt_id == prompt_id).limit(1)
+    )
+    if prr_result.scalar_one_or_none() is not None:
+        audit_ref_count += 1
+
+    # Check QueryResult
+    qr_result = await db.execute(
+        select(QueryResult.id).where(QueryResult.prompt_id == prompt_id).limit(1)
+    )
+    if qr_result.scalar_one_or_none() is not None:
+        audit_ref_count += 1
+
+    # Soft delete: set deleted_at timestamp
+    prompt.deleted_at = utcnow()
     await db.commit()
+
+    # Log if we had references (for monitoring, not blocking)
+    if audit_ref_count > 0:
+        # Could emit a log event here if needed
+        pass
 
 
 @router.put("/{prompt_id}", response_model=PromptOut)

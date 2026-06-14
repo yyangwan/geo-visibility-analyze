@@ -82,6 +82,18 @@ class TestDetectMentions:
         mentions = detect_mentions(text, "平安保险", aliases=None)
         assert len(mentions) >= 1
 
+    def test_case_insensitive_matching(self):
+        """Brand matching should be case-insensitive (e.g., 'hario' matches 'Hario')."""
+        # Lowercase brand name should match capitalized text
+        mentions = detect_mentions("Hario is a great brand", "hario", [])
+        assert len(mentions) >= 1
+        # Capitalized brand name should match lowercase text
+        mentions2 = detect_mentions("fellow products are good", "Fellow", [])
+        assert len(mentions2) >= 1
+        # Mixed case
+        mentions3 = detect_mentions("The HARIO V60 works well", "hario", [])
+        assert len(mentions3) >= 1
+
 
 class TestCheckRecommendation:
     def test_recommend_keywords(self):

@@ -83,11 +83,17 @@ def detect_mentions(
 
 
 def _find_all_occurrences(text: str, keyword: str) -> list[int]:
-    """Find all positions of keyword in text, preferring whole-word matches."""
+    """Find all positions of keyword in text, preferring whole-word matches.
+
+    Case-insensitive search to handle brand name variations (e.g., 'hario' vs 'Hario').
+    """
     positions = []
+    # Case-insensitive search: work on lowercased versions but track positions in original text
+    text_lower = text.lower()
+    keyword_lower = keyword.lower()
     start = 0
     while True:
-        pos = text.find(keyword, start)
+        pos = text_lower.find(keyword_lower, start)
         if pos == -1:
             break
         positions.append(pos)

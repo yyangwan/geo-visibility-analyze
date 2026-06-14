@@ -19,7 +19,13 @@ Key routing rules:
 
 ## Current Status
 
-- **Progress**: `~/.gstack/projects/geo-visibility-analyze/progress.md`
-- **Plan**: `~/.gstack/projects/geo-visibility-analyze/implementation-plan-20260510.md`
-- **Phase**: CEO Review Complete — Decision Intent Filter ready for implementation
-- **Next**: Implement DecisionIntentFilter (V1 rule-based) — 6 tasks, ~1.5h CC
+- **Plan**: `docs/user-like-llm-collection-issue-list.md`
+- **Phase**: Issue 2.3 (Kimi 多轮 search) Complete — 14 tests passing
+- **Next**: Issue 3.3 (解析降级与错误记录集成) - 添加 parse_error 字段支持
+- **Progress**: Response parser (37 tests ✅) → Kimi multi-round (14 tests ✅) → Parse error handling
+
+## Session Handoff Protocol
+
+Use `/checkpoint` skill for saving and resuming work state:
+- User says "save progress" → invoke `/checkpoint`
+- User says "resume" → invoke `/checkpoint resume`

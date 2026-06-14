@@ -55,3 +55,38 @@ async def test_verify_genilink_token_refreshes_jwks_on_unknown_kid(monkeypatch):
     assert payload == {"sub": "user-1", "scope": "project", "pid": "project-1"}
     assert calls["fetch"] == 2
     assert calls["decode"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_jwks_disables_proxy_settings(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": []}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            assert url == genilink_auth.GENILINK_JWKS_URL
+            return FakeResponse()
+
+    monkeypatch.setattr(genilink_auth.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(genilink_auth, "_jwks_cache", None)
+    monkeypatch.setattr(genilink_auth, "_jwks_cache_expires", 0)
+
+    jwks = await genilink_auth._fetch_jwks()
+
+    assert jwks == {"keys": []}
+    assert captured["trust_env"] is False

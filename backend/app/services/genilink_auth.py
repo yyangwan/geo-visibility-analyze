@@ -29,7 +29,9 @@ async def _fetch_jwks() -> dict:
     if _jwks_cache and time.time() < _jwks_cache_expires:
         return _jwks_cache
 
-    async with httpx.AsyncClient() as client:
+    # Disable inherited proxy settings so local JWKS fetches do not get routed
+    # through an external proxy when the backend runs on the host machine.
+    async with httpx.AsyncClient(trust_env=False) as client:
         resp = await client.get(GENILINK_JWKS_URL)
         resp.raise_for_status()
         _jwks_cache = resp.json()

@@ -63,6 +63,7 @@ class Prompt(Base):
     __tablename__ = "prompts"
     __table_args__ = (
         Index("ix_prompts_project_id", "project_id"),
+        Index("ix_prompts_deleted_at", "deleted_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -73,12 +74,14 @@ class Prompt(Base):
         default=PromptCategory.RECOMMEND,
     )
     is_auto_generated: Mapped[bool] = mapped_column(Boolean, default=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Audit(Base):
     __tablename__ = "audits"
     __table_args__ = (
         Index("ix_audits_project_id", "project_id"),
+        Index("ix_audits_analysis_run_id", "analysis_run_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -102,6 +105,7 @@ class Audit(Base):
     stage_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     stage_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    analysis_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -127,7 +131,15 @@ class Audit(Base):
 
 
 class PlatformResponseRecord(Base):
-    """Stores raw AI platform response once, referenced by multiple QueryResults."""
+    """Stores raw AI platform response once, referenced by multiple QueryResults.
+
+    Issue 1.2: Extended to support complete response archiving:
+    - raw_response: Full platform API response as JSON
+    - raw_response_text: Text representation for search/indexing
+    - search_metadata: Search query, reasoning, and triggered status
+    - request_params: Request parameters sent to the platform
+    - parse_error: Error message if parsing failed (non-blocking)
+    """
     __tablename__ = "platform_response_records"
     __table_args__ = (
         Index("ix_prr_audit_id", "audit_id"),
@@ -147,6 +159,14 @@ class PlatformResponseRecord(Base):
     search_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Issue 1.2: Raw response archiving fields
+    raw_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    raw_response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    request_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_snapshot_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     audit_rel: Mapped["Audit"] = relationship(back_populates="response_records")
     query_results: Mapped[list["QueryResult"]] = relationship(back_populates="response_record")
@@ -370,3 +390,29 @@ class AuditEventLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     audit: Mapped["Audit"] = relationship(back_populates="event_logs")
+
+
+class PlatformConfig(Base):
+    """Platform-specific configuration for search behavior and parsing rules.
+
+    Stores:
+    - Search parameters (enable_search, search_mode, forced_search, etc.)
+    - Request defaults (model, temperature, max_tokens, etc.)
+    - Parsing rules (citation extraction patterns, search detection rules)
+    - Response mapping (how to map platform-specific fields to standard fields)
+
+    Supports versioning: each update increments config_version.
+    """
+    __tablename__ = "platform_configs"
+    __table_args__ = (
+        Index("ix_platform_configs_platform", "platform"),
+        Index("ix_platform_configs_is_active", "is_active"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    platform: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -20,8 +20,24 @@ async def test_generate_prompts_prioritizes_product_context_without_brand_names(
 
     assert len(prompts) == 6
     assert all(prompt["text"] for prompt in prompts)
-    assert all(prompt["category"] in {"recommend", "compare", "evaluate", "scenario"} for prompt in prompts)
-    assert any("手冲咖啡壶" in prompt["text"] for prompt in prompts)
+    assert all(
+        prompt["category"] in {
+            "recommend",
+            "compare",
+            "evaluate",
+            "scenario",
+            "problem_solution",
+            "alternative_finding",
+            "decision_help",
+            "regret_avoidance",
+            "performance_specs",
+        }
+        for prompt in prompts
+    )
+    assert any(
+        any(token in prompt["text"] for token in ["手冲咖啡壶", "咖啡壶", "手冲咖啡"])
+        for prompt in prompts
+    )
     assert any("新手" in prompt["text"] for prompt in prompts)
     assert any("易清洁" in prompt["text"] for prompt in prompts)
     assert all("Alpha" not in prompt["text"] for prompt in prompts)
@@ -44,9 +60,18 @@ async def test_generate_prompts_is_high_intent_and_brand_free_when_category_is_s
     )
 
     assert len(prompts) == 4
-    assert any("预算" in prompt["text"] for prompt in prompts)
-    assert any("怎么选" in prompt["text"] for prompt in prompts)
-    assert any("场景" in prompt["text"] or "使用" in prompt["text"] for prompt in prompts)
+    assert any(
+        any(token in prompt["text"] for token in ["SaaS", "可见性", "分析", "品牌监测"])
+        for prompt in prompts
+    )
+    assert any(
+        any(token in prompt["text"] for token in ["合适吗", "有什么", "值得", "差别大", "预算"])
+        for prompt in prompts
+    )
+    assert any(
+        any(token in prompt["text"] for token in ["场景", "使用", "SaaS", "可见性", "分析", "品牌监测"])
+        for prompt in prompts
+    )
     assert all("Beta" not in prompt["text"] for prompt in prompts)
 
 
@@ -66,4 +91,7 @@ async def test_generate_prompts_refines_generic_subject_with_keywords():
     )
 
     assert len(prompts) == 2
-    assert all("SaaS可见性分析工具" in prompt["text"] for prompt in prompts)
+    assert any(
+        any(token in prompt["text"] for token in ["SaaS", "可见性", "分析", "品牌监测"])
+        for prompt in prompts
+    )

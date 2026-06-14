@@ -163,7 +163,7 @@ class TestFilterBatch:
         assert filter.filter_batch([]) == []
 
     def test_filter_batch_all_low_intent_keeps_minimum(self, filter):
-        """Test that filter_batch keeps at least 3 queries when all are LOW intent."""
+        """Test that filter_batch returns no queries when all are LOW intent."""
         queries = [
             "什么是重疾险",
             "重疾险简介",
@@ -173,8 +173,7 @@ class TestFilterBatch:
         ]
         result = filter.filter_batch(queries)
 
-        # Should keep at least 3 for template fallback
-        assert len(result) >= 3
+        assert result == []
 
 
 class TestExplainBatch:
@@ -203,3 +202,35 @@ class TestFactoryFunction:
         """Test factory function creates instance."""
         filter_instance = create_decision_intent_filter()
         assert isinstance(filter_instance, DecisionIntentFilter)
+
+
+class TestRegressionCoverage:
+    """Regression coverage for leaked industry jargon and fallback behavior."""
+
+    @pytest.fixture
+    def filter(self):
+        return DecisionIntentFilter()
+
+    def test_suitability_query_with_industry_jargon_is_filtered(self, filter):
+        analysis = filter.analyze("日常使用者平时用电商手冲咖啡咖啡壶工具合适吗？")
+
+        assert analysis.intent_strength == "LOW"
+        assert analysis.suggested_action == "FILTER"
+        assert "industry" in analysis.reason.lower() or "classification" in analysis.reason.lower()
+
+    def test_plain_suitability_query_is_kept(self, filter):
+        analysis = filter.analyze("日常使用者平时用手冲咖啡咖啡壶工具合适吗？")
+
+        assert analysis.intent_strength == "MEDIUM"
+        assert analysis.suggested_action == "KEEP"
+
+    def test_filter_batch_does_not_reintroduce_low_intent_queries(self, filter):
+        queries = [
+            "咖啡壶是什么？",
+            "咖啡壶发展历史",
+            "咖啡壶如何申请",
+        ]
+
+        result = filter.filter_batch(queries)
+
+        assert result == []

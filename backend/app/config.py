@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     deepseek_model: str = "deepseek-v3"
+    deepseek_web_auth_token: str = ""
+    deepseek_web_cookie: str = ""
+    deepseek_web_user_agent: str = ""
+    deepseek_web_headers_json: str = ""
+    deepseek_web_chat_session_id: str = ""
+    deepseek_web_parent_message_id: str = ""
+    deepseek_web_model_type: str = ""
 
     # Qwen (Tongyi) API
     qwen_api_key: str = ""

@@ -30,7 +30,7 @@ describe('generatePrompts', () => {
   it('sends the current project product category', async () => {
     await generatePrompts(42, 12, '车险')
 
-    expect(mocks.post).toHaveBeenCalledWith('/projects/42/prompts/generate', {
+    expect(mocks.post).toHaveBeenCalledWith('/prompts/generate', {
       project_id: 42,
       count: 12,
       product_category: '车险',
