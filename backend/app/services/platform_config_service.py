@@ -29,6 +29,11 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "enable_search": False,
             "search_options": {},
         },
+        "gateway": {
+            "base_url": None,
+            "api_key": None,
+            "model": None,
+        },
         "request": {
             "temperature": 0.3,
             "max_tokens": None,

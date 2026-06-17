@@ -301,3 +301,51 @@ async def test_deepseek_adapter_falls_back_to_api_mode(monkeypatch):
     assert result == api_results
     api_query.assert_awaited_once()
     web_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_adapter_gateway_search_preserves_search_envelope(monkeypatch):
+    adapter = DeepSeekAdapter()
+    adapter.set_platform_config(
+        {
+            "capture_mode": "gateway_search",
+            "search": {
+                "enable_search": True,
+                "search_options": {"forced_search": True},
+            },
+            "gateway": {
+                "base_url": "http://gateway.example/v1",
+                "api_key": "gateway-key",
+                "model": "gateway-model",
+            },
+        }
+    )
+
+    body = adapter._build_request_body("test prompt")
+    assert body["enable_search"] is True
+    assert body["search_options"] == {"forced_search": True}
+
+    captured = {}
+
+    async def fake_query(self, prompts):
+        captured["base_url"] = self.base_url
+        captured["api_key"] = self.api_key
+        captured["model"] = self.model
+        captured["prompts"] = prompts
+        return [
+            PlatformResponse(
+                platform="deepseek",
+                prompt=prompts[0],
+                response_text="gateway answer",
+            )
+        ]
+
+    monkeypatch.setattr(OpenAICompatAdapter, "query", fake_query)
+
+    result = await adapter.query(["What is Alpha?"])
+
+    assert result[0].response_text == "gateway answer"
+    assert captured["base_url"] == "http://gateway.example/v1"
+    assert captured["api_key"] == "gateway-key"
+    assert captured["model"] == "gateway-model"
+    assert captured["prompts"] == ["What is Alpha?"]

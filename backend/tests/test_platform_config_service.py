@@ -24,8 +24,12 @@ async def test_get_default_config_deepseek():
     assert "web" in config
     assert "request" in config
     assert "parsing" in config
+    assert "gateway" in config
     assert config["search"]["enable_search"] is False
     assert config["search"]["search_options"] == {}
+    assert config["gateway"]["base_url"] is None
+    assert config["gateway"]["api_key"] is None
+    assert config["gateway"]["model"] is None
     assert config["web"]["headers"]["Origin"] == "https://chat.deepseek.com"
     assert config["web"]["headers"]["Referer"] == "https://chat.deepseek.com/"
 
@@ -45,6 +49,7 @@ async def test_get_platform_config_default(db_session):
     assert config is not None
     assert "search" in config
     assert "web" in config
+    assert "gateway" in config
     assert config["search"]["enable_search"] is False
 
 
@@ -164,6 +169,9 @@ def test_default_platform_configs_reflect_calibration_baseline():
         assert config["request"]["temperature"] == 0.3
         assert config["request"]["max_tokens"] is None
         assert config["search"]["enable_search"] is expected["search_enabled"]
+        if platform == "deepseek":
+            assert "gateway" in config
+            assert config["gateway"]["base_url"] is None
 
         parsing = config["parsing"]
         assert parsing["citation_format"] == expected["citation_format"]

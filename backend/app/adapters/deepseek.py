@@ -25,6 +25,29 @@ class DeepSeekAdapter(OpenAICompatAdapter):
         self._web_adapter = DeepSeekWebAdapter()
         self._web_adapter.set_platform_config(self.get_platform_config())
 
+    def _gateway_search_mode(self) -> bool:
+        return self._capture_mode() == "gateway_search"
+
+    def _resolve_gateway_config(self) -> dict:
+        config = self.get_platform_config()
+        gateway = config.get("gateway", {}) if isinstance(config, dict) else {}
+        return dict(gateway) if isinstance(gateway, dict) else {}
+
+    def _apply_gateway_overrides(self) -> None:
+        gateway_config = self._resolve_gateway_config()
+
+        base_url = gateway_config.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            self.base_url = base_url.strip()
+
+        api_key = gateway_config.get("api_key")
+        if isinstance(api_key, str) and api_key.strip():
+            self.api_key = api_key.strip()
+
+        model = gateway_config.get("model")
+        if isinstance(model, str) and model.strip():
+            self.model = model.strip()
+
     def set_platform_config(self, config: dict) -> None:
         super().set_platform_config(config)
         self._web_adapter.set_platform_config(config)
@@ -49,6 +72,8 @@ class DeepSeekAdapter(OpenAICompatAdapter):
                     "deepseek_web_capture_failed_falling_back",
                     error=str(exc),
                 )
+        if self._gateway_search_mode():
+            self._apply_gateway_overrides()
         return await super().query(prompts)
 
     async def health_check(self) -> bool:
@@ -61,6 +86,8 @@ class DeepSeekAdapter(OpenAICompatAdapter):
                     "deepseek_web_health_check_failed_falling_back",
                     error=str(exc),
                 )
+        if self._gateway_search_mode():
+            self._apply_gateway_overrides()
         return await super().health_check()
 
     def _build_request_body(self, prompt: str) -> dict:
@@ -74,8 +101,9 @@ class DeepSeekAdapter(OpenAICompatAdapter):
         # The public API is stateless and does not expose DeepSeek web-search
         # parameters, so strip any search envelope inherited from generic
         # OpenAI-compatible defaults or platform config.
-        body.pop("enable_search", None)
-        body.pop("search_options", None)
-        body.pop("tools", None)
+        if not self._gateway_search_mode():
+            body.pop("enable_search", None)
+            body.pop("search_options", None)
+            body.pop("tools", None)
 
         return body
