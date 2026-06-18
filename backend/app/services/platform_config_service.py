@@ -93,8 +93,9 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "max_tokens": None,
         },
         "parsing": {
-            # Qwen returns source URLs in the answer body.
-            "citation_format": "markdown",
+            # Qwen may return citations in search_results
+            "citation_format": "search_results",
+            "citation_path": "choices.0.message.search_results",
             "search_status_path": "choices.0.message.search_status",
             "search_query_path": "choices.0.message.search_query",
             "search_results_path": "choices.0.message.search_results",
