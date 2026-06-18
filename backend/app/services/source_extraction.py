@@ -49,6 +49,22 @@ SOURCE_KEYWORD_MAP: dict[str, str] = {
     "淘宝": "taobao.com",
     "京东": "jd.com",
     "天猫": "tmall.com",
+    # Microsoft / cloud docs
+    "Microsoft Learn": "learn.microsoft.com",
+    "Azure documentation": "learn.microsoft.com",
+    "Azure": "learn.microsoft.com",
+    "Microsoft Learn documentation": "learn.microsoft.com",
+    # Time / clock services
+    "Time and Date": "timeanddate.com",
+    "TimeandDate": "timeanddate.com",
+    "timeanddate.com": "timeanddate.com",
+    "World Time Buddy": "worldtimebuddy.com",
+    "WorldTimeBuddy": "worldtimebuddy.com",
+    "worldtimebuddy.com": "worldtimebuddy.com",
+    "Time.is": "time.is",
+    "time.is": "time.is",
+    "Google Search": "google.com",
+    "Google": "google.com",
     # Government / Official
     "中国政府网": "gov.cn",
     "国家统计局": "stats.gov.cn",

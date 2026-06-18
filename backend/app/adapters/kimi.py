@@ -159,7 +159,11 @@ class KimiAdapter(OpenAICompatAdapter):
                     )
 
                 client = await self._get_client()
-                messages = [{"role": "user", "content": prompt}]
+                messages = request_params.get(
+                    "messages",
+                    [{"role": "user", "content": prompt}],
+                )
+                used_web_search = False
 
                 for _round in range(_MAX_TOOL_ROUNDS):
                     # Build request body with current messages
@@ -272,10 +276,10 @@ class KimiAdapter(OpenAICompatAdapter):
                         # Issue 2.3: Build search_metadata with extracted search query
                         search_metadata = {
                             "search_enabled": True,
-                            "search_triggered": search_query is not None,
-                            "search_query": search_query,
+                            "search_triggered": used_web_search or search_query is not None,
+                            "search_query": search_query or prompt,
                             "search_reasoning": None,
-                            "search_results_count": 0,
+                            "search_results_count": len(citations),
                             "tool_call_rounds": len(all_responses) - 1,  # Exclude final response
                         }
 
@@ -307,6 +311,7 @@ class KimiAdapter(OpenAICompatAdapter):
                         tool_call_name = tool_call["function"]["name"]
 
                         if tool_call_name == "$web_search":
+                            used_web_search = True
                             # Extract search query for metadata
                             if search_query is None:
                                 search_query = self._extract_search_query_from_tool_call(tool_call)

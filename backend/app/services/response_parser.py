@@ -444,6 +444,16 @@ def extract_search_metadata(
                 if isinstance(tc, dict)
             )
 
+    # Some models only emit source URLs in the final text. Treat markdown links
+    # as a search signal so the audit still records a triggered search.
+    if not search_triggered:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            markdown_citations = _extract_markdown_citations(content)
+            if markdown_citations:
+                search_triggered = True
+                search_results_count = len(markdown_citations)
+
     metadata = {
         "search_enabled": search_enabled,
         "search_triggered": search_triggered,
