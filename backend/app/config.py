@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Hunyuan (Tencent) API
     hunyuan_api_key: str = ""
     hunyuan_base_url: str = "https://api.hunyuan.cloud.tencent.com/v1"
-    hunyuan_model: str = "hunyuan-t1-latest"
+    hunyuan_model: str = "hunyuan-turbos-latest"
 
     # Query settings
     query_timeout_seconds: int = 60
