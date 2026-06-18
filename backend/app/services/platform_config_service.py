@@ -29,11 +29,6 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "enable_search": False,
             "search_options": {},
         },
-        "gateway": {
-            "base_url": None,
-            "api_key": None,
-            "model": None,
-        },
         "request": {
             "temperature": 0.3,
             "max_tokens": None,
@@ -73,8 +68,8 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "max_tokens": None,
         },
         "parsing": {
-            # Kimi now emits markdown links in the final answer when prompted.
-            "citation_format": "markdown",
+            # Issue 2.3: Kimi uses tool_calls for search
+            "citation_format": "tool_calls",
             "supports_multi_round_search": True,
             "search_tool_name": "$web_search",
             # Issue 3.2: Search metadata paths (may be in tool_call arguments)
@@ -137,7 +132,7 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "max_tokens": None,
         },
         "parsing": {
-            "citation_format": "markdown",
+            "citation_format": "none",
         },
     },
 }
@@ -272,4 +267,3 @@ def get_default_config(platform: str) -> dict[str, Any]:
         Default configuration dictionary
     """
     return _DEFAULT_PLATFORM_CONFIGS.get(platform, {}).copy()
-

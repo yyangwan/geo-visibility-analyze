@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # Kimi (Moonshot) API
     kimi_api_key: str = ""
     kimi_base_url: str = "https://api.moonshot.cn/v1"
-    kimi_model: str = "moonshot-v1-32k"
+    kimi_model: str = "moonshot-v1-8k"
 
     # Wenxin (Baidu Qianfan) API
     wenxin_api_key: str = ""
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Hunyuan (Tencent) API
     hunyuan_api_key: str = ""
     hunyuan_base_url: str = "https://api.hunyuan.cloud.tencent.com/v1"
-    hunyuan_model: str = "hunyuan-t1-latest"
+    hunyuan_model: str = "hunyuan-lite"
 
     # Query settings
     query_timeout_seconds: int = 60

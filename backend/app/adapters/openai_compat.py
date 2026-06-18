@@ -85,21 +85,6 @@ class OpenAICompatAdapter(PlatformAdapter):
 
             if enable_search:
                 # For platforms that use enable_search flag (DeepSeek-style)
-                body["messages"] = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Answer with the source URLs you used in markdown links."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Answer with the source URLs you used in markdown links."
-                        ),
-                    },
-                ]
                 body["enable_search"] = True
                 # Merge search_options if provided, otherwise use default
                 if "search_options" in search_config:
@@ -113,21 +98,6 @@ class OpenAICompatAdapter(PlatformAdapter):
         else:
             # Use defaults from adapter
             if self.search_enabled:
-                body["messages"] = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Answer with the source URLs you used in markdown links."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Answer with the source URLs you used in markdown links."
-                        ),
-                    },
-                ]
                 body["enable_search"] = True
                 body["search_options"] = {"forced_search": True}
 
