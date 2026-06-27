@@ -156,7 +156,14 @@ export const exportReportPdf = (reportId: number) =>
 // Suggestions
 export interface SuggestionDetail {
   action_channel?: string
+  evidence_sources?: string[]
+  evidence_channels?: string[]
+  action_sources?: string[]
+  action_channels?: string[]
   action_type?: string
+  audit_evidence?: string[]
+  acceptance_criteria?: string[]
+  measurement_plan?: string
   outline?: string[]
   keywords?: string[]
   timeline?: { week: string; task: string }[]

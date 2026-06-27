@@ -30,12 +30,13 @@ router = APIRouter()
 async def source_authority_trends(
     project_id: str,
     limit: int = Query(10, ge=2, le=50),
+    audit_id: int | None = Query(None),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Track which sources/domains AI platforms cite over time."""
     require_project_scope(current_user, project_id)
-    return await get_source_authority_trends(db, project_id, limit)
+    return await get_source_authority_trends(db, project_id, limit, audit_id)
 
 
 @router.get(

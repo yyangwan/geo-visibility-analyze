@@ -72,6 +72,16 @@ _WORKER_ID = f"local-{os.getpid()}"
 _LEASE_SECONDS = 15 * 60
 
 
+def is_degraded_response(resp: PlatformResponse) -> bool:
+    """Return whether a response should be archived but excluded from scoring."""
+    finish_reason = (resp.finish_reason or "").strip().lower()
+    if finish_reason == "length":
+        return True
+
+    metadata = resp.search_metadata or {}
+    return bool(metadata.get("response_degraded"))
+
+
 async def _next_stage_attempt_no(db: AsyncSession, audit_id: int, stage_name: str) -> int:
     result = await db.execute(
         select(func.coalesce(func.max(AuditStageRun.attempt_no), 0)).where(
@@ -737,7 +747,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
                 error=resp.error_message if not resp.success else None,
             )
 
-            if resp.success and resp.response_text:
+            if resp.success and resp.response_text and not is_degraded_response(resp):
                 mentions = detect_mentions(resp.response_text, brand.name, brand.aliases, industry="")
                 if mentions:
                     best = max(mentions, key=lambda m: m.confidence)

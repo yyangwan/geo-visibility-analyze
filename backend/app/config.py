@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     deepseek_web_parent_message_id: str = ""
     deepseek_web_model_type: str = ""
 
+    # Bocha search API for DeepSeek grounded synthesis mode
+    bocha_api_key: str = ""
+    bocha_base_url: str = "https://api.bocha.cn"
+    bocha_search_endpoint: str = "/v1/web-search"
+    bocha_result_count: int = 10
+    bocha_top_k: int = 8
+    bocha_max_per_domain: int = 2
+
     # Qwen (Tongyi) API
     qwen_api_key: str = ""
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"

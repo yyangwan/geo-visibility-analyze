@@ -23,6 +23,7 @@ from app.models.models import (
     ResponseAnalysis,
 )
 from app.services.audit_service import BrandData
+from app.services.source_quality import clean_cited_sources
 
 logger = get_logger("analysis")
 
@@ -222,7 +223,7 @@ async def _analyze_single(
         ra.topics_covered = result.get("topics_covered", [])
         ra.answer_structure = result.get("answer_structure")
         ra.competitor_refs = result.get("competitor_refs", [])
-        ra.cited_sources = result.get("cited_sources", [])
+        ra.cited_sources = clean_cited_sources(result.get("cited_sources", []))
         ra.analysis_model = model
         ra.status = "completed"
         await db.commit()

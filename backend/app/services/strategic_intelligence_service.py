@@ -19,6 +19,7 @@ from app.models.models import (
     SourceCitation,
 )
 from app.services.audit_service import BrandData
+from app.services.source_quality import clean_cited_sources, is_valid_source_domain, score_source_authority
 
 
 # ---------------------------------------------------------------------------
@@ -26,18 +27,23 @@ from app.services.audit_service import BrandData
 # ---------------------------------------------------------------------------
 
 async def get_source_authority_trends(
-    db: AsyncSession, project_id: str, limit: int = 10
+    db: AsyncSession, project_id: str, limit: int = 10, audit_id: int | None = None
 ) -> dict:
     """Track which sources/domains AI platforms cite over time."""
-    # Load recent completed/partial audits
-    audit_result = await db.execute(
+    audit_query = (
         select(Audit)
         .where(Audit.project_id == project_id)
         .where(Audit.status.in_(["completed", "partial"]))
-        .order_by(Audit.created_at.desc())
-        .limit(limit)
     )
-    audits = list(reversed(audit_result.scalars().all()))  # oldest first
+    if audit_id is not None:
+        audit_query = audit_query.where(Audit.id == audit_id)
+    else:
+        audit_query = audit_query.order_by(Audit.created_at.desc()).limit(limit)
+
+    audit_result = await db.execute(audit_query)
+    audits = audit_result.scalars().all()
+    if audit_id is None:
+        audits = list(reversed(audits))  # oldest first
 
     if not audits:
         return {"audits": [], "domain_trends": [], "platform_preferences": [], "authority_trend": {}}
@@ -66,26 +72,35 @@ async def get_source_authority_trends(
     domain_audit_counts: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
     domain_audit_authority: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
     platform_domain_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    source_citation_keys: set[tuple[int, str, str]] = set()
 
     # From SourceCitation
     for sc in citations:
         aid = sc.audit_id
-        if aid is None:
+        if aid is None or not is_valid_source_domain(sc.domain):
             continue
+        source_citation_keys.add((aid, sc.platform, sc.domain))
         domain_audit_counts[sc.domain][aid] += sc.citation_count
         platform_domain_counts[sc.platform][sc.domain] += sc.citation_count
+        authority_score = score_source_authority(sc.domain, sc.urls or [])
+        if authority_score:
+            domain_audit_authority[sc.domain][aid].extend(
+                [authority_score] * (sc.citation_count or 1)
+            )
 
     # From ResponseAnalysis.cited_sources (authority scores + counts)
     for ra, aid, platform in ra_rows:
-        for source in (ra.cited_sources or []):
-            domain = source.get("domain", "")
-            if not domain:
+        for source in clean_cited_sources(ra.cited_sources):
+            domain = source["domain"]
+            authority = source.get("authority_score")
+            if authority is None:
                 continue
-            authority = source.get("authority_score", 3)
             domain_audit_authority[domain][aid].append(authority)
-            # Also count from analysis if no SourceCitation exists
-            domain_audit_counts[domain][aid] += 1
-            platform_domain_counts[platform][domain] += 1
+            # Count LLM analysis sources only when audit-time structured
+            # citations did not already capture this platform/domain.
+            if (aid, platform, domain) not in source_citation_keys:
+                domain_audit_counts[domain][aid] += 1
+                platform_domain_counts[platform][domain] += 1
 
     # Build domain trends (top domains by total citations)
     domain_totals = Counter()
@@ -246,7 +261,7 @@ async def get_competitor_positioning_map(db: AsyncSession, project_id: str) -> d
                     break
 
         # Authority from cited_sources
-        for source in (ra.cited_sources or []):
+        for source in clean_cited_sources(ra.cited_sources):
             auth = source.get("authority_score", 3)
             # Associate with primary brands (source authority affects all brands in response)
             for pb in [b for b in brands if not b.is_competitor]:
@@ -500,10 +515,8 @@ async def get_multi_audit_comparison(
                 structure_counter[ra.answer_structure] += 1
             for t in (ra.topics_covered or []):
                 topic_counter[t] += 1
-            for source in (ra.cited_sources or []):
-                domain = source.get("domain", "")
-                if domain:
-                    source_set.add(domain)
+            for source in clean_cited_sources(ra.cited_sources):
+                source_set.add(source["domain"])
 
         all_sources_per_audit[audit_id] = source_set
 

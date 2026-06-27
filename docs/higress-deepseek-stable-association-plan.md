@@ -68,6 +68,7 @@ If the gateway must keep more context, it can also forward:
   "prompt": "user prompt",
   "chat_session_id": "optional",
   "parent_message_id": "optional",
+  "search_engine": "bocha",
   "request_params": {},
   "gateway_metadata": {}
 }
@@ -201,3 +202,4 @@ This work is complete when all of the following are true:
 Implement Phase 1 and Phase 2 in the backend repo first, then add the Higress wiring in its own repo or config bundle. That keeps the contract stable before you touch gateway behavior.
 
 For the gateway-side draft configuration, see [Higress Gateway Config Draft](higress-gateway-config-draft.md).
+For a concrete Bocha-oriented route sample, see [Higress DeepSeek Bocha Sample](higress-deepseek-bocha-sample.md).

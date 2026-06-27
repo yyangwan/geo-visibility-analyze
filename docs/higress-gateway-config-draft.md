@@ -123,6 +123,11 @@ backend adapter already sends:
 - `User-Agent`
 - any additional DeepSeek-specific browser headers already configured
 
+For the DeepSeek gateway search path, pass the search engine explicitly so the
+gateway can route to the same source pool that DeepSeek uses upstream:
+
+- `search_engine: bocha`
+
 Do not inject snapshot-specific data into the request body. The backend hashes
 the persisted response metadata, and changing the body in the gateway would
 change the resulting snapshot identity.
@@ -182,5 +187,6 @@ If you take this path:
 ## Related Work In This Repo
 
 - [Higress + DeepSeek stable association implementation plan](higress-deepseek-stable-association-plan.md)
+- [Higress DeepSeek Bocha sample](higress-deepseek-bocha-sample.md)
 - [Backend trace propagation](../backend/app/adapters/base.py)
 - [Audit execution context injection](../backend/app/services/audit_service.py)

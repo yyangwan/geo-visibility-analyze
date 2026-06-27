@@ -225,6 +225,41 @@ async def test_analyze_single_success(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_analyze_single_filters_synthetic_cited_sources(db_session: AsyncSession):
+    _, prrs, brands = await _seed_audit(db_session, 1)
+    ra = ResponseAnalysis(response_record_id=prrs[0].id, status="pending")
+    db_session.add(ra)
+    await db_session.commit()
+
+    response = dict(MOCK_LLM_RESPONSE)
+    response["cited_sources"] = [
+        {"domain": "source_S1", "authority_score": 3},
+        {"domain": "https://www.example.com/path", "authority_score": 4},
+    ]
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(response)}}]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.services.response_analysis_service.httpx.AsyncClient", return_value=mock_client):
+        await _analyze_single(
+            db_session,
+            ra,
+            _brand_names(brands, competitor=False),
+            _brand_names(brands, competitor=True),
+        )
+
+    assert ra.status == "completed"
+    assert ra.cited_sources == [{"domain": "example.com", "authority_score": 4}]
+
+
+@pytest.mark.asyncio
 async def test_analyze_single_llm_failure(db_session: AsyncSession):
     _, prrs, brands = await _seed_audit(db_session, 1)
     ra = ResponseAnalysis(response_record_id=prrs[0].id, status="pending")

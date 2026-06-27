@@ -44,6 +44,11 @@ const priorityLabels: Record<string, { label: string; class: string }> = {
   low: { label: '低', class: 'priority-low' },
 }
 
+function formatList(value?: string[] | string) {
+  if (!value) return ''
+  return Array.isArray(value) ? value.filter(Boolean).join('、') : value
+}
+
 const filtered = computed(() => {
   let list = suggestions.value
   if (filterCategory.value !== 'all') {
@@ -203,9 +208,21 @@ onMounted(async () => {
             <!-- Detail action plan (collapsible) -->
             <div v-if="s.detail && expandedIds.has(s.id)" class="detail-panel">
               <div class="detail-grid">
-                <div v-if="s.detail.action_channel" class="detail-item">
+                <div v-if="s.detail.evidence_sources?.length" class="detail-item">
+                  <span class="detail-label">证据引用来源网站</span>
+                  <span class="detail-value">{{ formatList(s.detail.evidence_sources) }}</span>
+                </div>
+                <div v-if="s.detail.evidence_channels?.length" class="detail-item">
+                  <span class="detail-label">证据来源渠道</span>
+                  <span class="detail-value">{{ formatList(s.detail.evidence_channels) }}</span>
+                </div>
+                <div v-if="s.detail.action_sources?.length" class="detail-item">
+                  <span class="detail-label">行动落点网站</span>
+                  <span class="detail-value">{{ formatList(s.detail.action_sources) }}</span>
+                </div>
+                <div v-if="s.detail.action_channels?.length || s.detail.action_channel" class="detail-item">
                   <span class="detail-label">执行渠道</span>
-                  <span class="detail-value">{{ s.detail.action_channel }}</span>
+                  <span class="detail-value">{{ formatList(s.detail.action_channels) || s.detail.action_channel }}</span>
                 </div>
                 <div v-if="s.detail.action_type" class="detail-item">
                   <span class="detail-label">动作类型</span>
@@ -240,6 +257,22 @@ onMounted(async () => {
               <div v-if="s.detail.expected_outcome" class="detail-section">
                 <span class="detail-label">预期效果</span>
                 <p class="detail-text">{{ s.detail.expected_outcome }}</p>
+              </div>
+              <div v-if="s.detail.audit_evidence?.length" class="detail-section">
+                <span class="detail-label">审计证据</span>
+                <ul class="plain-list">
+                  <li v-for="(item, i) in s.detail.audit_evidence" :key="i">{{ item }}</li>
+                </ul>
+              </div>
+              <div v-if="s.detail.acceptance_criteria?.length" class="detail-section">
+                <span class="detail-label">验收标准</span>
+                <ul class="plain-list">
+                  <li v-for="(item, i) in s.detail.acceptance_criteria" :key="i">{{ item }}</li>
+                </ul>
+              </div>
+              <div v-if="s.detail.measurement_plan" class="detail-section">
+                <span class="detail-label">复测方案</span>
+                <p class="detail-text">{{ s.detail.measurement_plan }}</p>
               </div>
             </div>
 
@@ -468,6 +501,7 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-primary);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .detail-section {
@@ -498,6 +532,14 @@ onMounted(async () => {
 }
 
 .outline-list {
+  margin: 2px 0 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.plain-list {
   margin: 2px 0 0 0;
   padding-left: 18px;
   font-size: 11px;

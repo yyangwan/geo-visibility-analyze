@@ -317,6 +317,7 @@ async def test_deepseek_adapter_gateway_search_preserves_search_envelope(monkeyp
                 "base_url": "http://gateway.example/v1",
                 "api_key": "gateway-key",
                 "model": "gateway-model",
+                "search_engine": "bocha",
             },
         }
     )
@@ -324,6 +325,7 @@ async def test_deepseek_adapter_gateway_search_preserves_search_envelope(monkeyp
     body = adapter._build_request_body("test prompt")
     assert body["enable_search"] is True
     assert body["search_options"] == {"forced_search": True}
+    assert body["search_engine"] == "bocha"
 
     captured = {}
 
@@ -349,3 +351,48 @@ async def test_deepseek_adapter_gateway_search_preserves_search_envelope(monkeyp
     assert captured["api_key"] == "gateway-key"
     assert captured["model"] == "gateway-model"
     assert captured["prompts"] == ["What is Alpha?"]
+
+
+@pytest.mark.asyncio
+async def test_deepseek_adapter_switches_to_bocha_grounded(monkeypatch):
+    adapter = DeepSeekAdapter()
+    adapter.set_platform_config(
+        {
+            "capture_mode": "bocha_grounded",
+            "gateway": {
+                "base_url": "http://gateway.example/v1",
+                "api_key": "gateway-key",
+                "model": "gateway-model",
+            },
+        }
+    )
+
+    grounded_results = [
+        PlatformResponse(
+            platform="deepseek",
+            prompt="What is Alpha?",
+            response_text="grounded answer [S1]",
+        )
+    ]
+    captured = {}
+
+    async def fake_grounded_query(self, prompts):
+        captured["base_url"] = self.base_url
+        captured["api_key"] = self.api_key
+        captured["model"] = self.model
+        captured["prompts"] = prompts
+        return grounded_results
+
+    monkeypatch.setattr("app.adapters.deepseek.GroundedAnswerService.query", fake_grounded_query)
+
+    api_query = AsyncMock(return_value=[])
+    monkeypatch.setattr(OpenAICompatAdapter, "query", api_query)
+
+    result = await adapter.query(["What is Alpha?"])
+
+    assert result == grounded_results
+    assert captured["base_url"] == "https://api.deepseek.com"
+    assert captured["api_key"] == adapter.api_key
+    assert captured["model"] == adapter.api_model
+    assert captured["prompts"] == ["What is Alpha?"]
+    api_query.assert_not_awaited()

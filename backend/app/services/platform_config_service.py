@@ -33,6 +33,16 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "base_url": None,
             "api_key": None,
             "model": None,
+            "search_engine": "bocha",
+        },
+        "grounding": {
+            "provider": "bocha",
+            "mode": "search_then_synthesize",
+            "search_count": 10,
+            "top_k": 8,
+            "max_per_domain": 2,
+            "citation_marker_format": "[S{index}]",
+            "bocha_request": {},
         },
         "request": {
             "temperature": 0.3,
@@ -64,13 +74,24 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
         },
     },
     "kimi": {
+        "capture_mode": "native_search",
         "search": {
             "enable_search": True,
             "tools": ["web_search"],
+            "tool_choice": "auto",
         },
         "request": {
-            "temperature": 0.3,
-            "max_tokens": None,
+            "model": "kimi-k2.6",
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "max_tokens": 8192,
+            "system_prompt": (
+                "你是 Kimi，一个由月之暗面（Moonshot AI）开发的人工智能助手。"
+                "你擅长中英文对话，能够基于上下文提供有帮助、无害且诚实的回答。"
+                "当需要获取实时信息时，你会主动调用搜索工具。"
+                "回答时先给出结论，再给出关键依据。"
+                "如使用搜索，请在回答末尾列出引用来源名称和 URL。"
+            ),
         },
         "parsing": {
             # Issue 2.3: Kimi uses tool_calls for search
@@ -133,6 +154,7 @@ _DEFAULT_PLATFORM_CONFIGS: dict[str, dict[str, Any]] = {
             "search_options": {},
         },
         "request": {
+            "model": "hunyuan-turbos-latest",
             "temperature": 0.3,
             "max_tokens": None,
         },

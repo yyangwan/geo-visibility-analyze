@@ -10,6 +10,39 @@ from app.services import audit_service
 from app.services.source_extraction import ExtractedSource
 
 
+def test_is_degraded_response_detects_length_finish_reason():
+    resp = PlatformResponse(
+        platform="kimi",
+        prompt="p",
+        response_text="truncated",
+        finish_reason="length",
+    )
+
+    assert audit_service.is_degraded_response(resp) is True
+
+
+def test_is_degraded_response_detects_metadata_flag():
+    resp = PlatformResponse(
+        platform="kimi",
+        prompt="p",
+        response_text="truncated",
+        search_metadata={"response_degraded": True},
+    )
+
+    assert audit_service.is_degraded_response(resp) is True
+
+
+def test_is_degraded_response_allows_complete_response():
+    resp = PlatformResponse(
+        platform="kimi",
+        prompt="p",
+        response_text="complete",
+        finish_reason="stop",
+    )
+
+    assert audit_service.is_degraded_response(resp) is False
+
+
 async def _create_prompt(db, project_id: str, text: str):
     prompt = Prompt(project_id=project_id, text=text)
     db.add(prompt)

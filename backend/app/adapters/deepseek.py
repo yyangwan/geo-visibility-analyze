@@ -8,6 +8,7 @@ from app.adapters.deepseek_web import DeepSeekWebAdapter
 from app.adapters.openai_compat import OpenAICompatAdapter
 from app.config import settings
 from app.logging_config import get_logger
+from app.services.grounded_answer_service import GroundedAnswerService
 
 logger = get_logger("deepseek")
 
@@ -27,6 +28,9 @@ class DeepSeekAdapter(OpenAICompatAdapter):
 
     def _gateway_search_mode(self) -> bool:
         return self._capture_mode() == "gateway_search"
+
+    def _bocha_grounded_mode(self) -> bool:
+        return self._capture_mode() in {"bocha_grounded", "bocha_search"}
 
     def _resolve_gateway_config(self) -> dict:
         config = self.get_platform_config()
@@ -48,6 +52,15 @@ class DeepSeekAdapter(OpenAICompatAdapter):
         if isinstance(model, str) and model.strip():
             self.model = model.strip()
 
+    def _resolve_gateway_search_engine(self) -> str | None:
+        gateway_config = self._resolve_gateway_config()
+        search_engine = gateway_config.get("search_engine") or gateway_config.get("search_provider")
+        if isinstance(search_engine, str):
+            search_engine = search_engine.strip()
+            if search_engine:
+                return search_engine
+        return None
+
     def set_platform_config(self, config: dict) -> None:
         super().set_platform_config(config)
         self._web_adapter.set_platform_config(config)
@@ -64,6 +77,18 @@ class DeepSeekAdapter(OpenAICompatAdapter):
         return str(capture_mode or "api_compat").lower()
 
     async def query(self, prompts: list[str]):
+        if self._bocha_grounded_mode():
+            grounded_service = GroundedAnswerService(
+                platform=self.platform_name,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                model=self.model,
+                platform_config=self.get_platform_config(),
+                runtime_context=self.get_runtime_context(),
+                trace_headers=self.build_trace_headers(),
+            )
+            return await grounded_service.query(prompts)
+
         if self._capture_mode() == "official_web":
             try:
                 return await self._web_adapter.query(prompts)
@@ -77,6 +102,9 @@ class DeepSeekAdapter(OpenAICompatAdapter):
         return await super().query(prompts)
 
     async def health_check(self) -> bool:
+        if self._bocha_grounded_mode():
+            return bool(self.api_key and settings.bocha_api_key)
+
         if self._capture_mode() == "official_web":
             try:
                 if await self._web_adapter.health_check():
@@ -105,5 +133,9 @@ class DeepSeekAdapter(OpenAICompatAdapter):
             body.pop("enable_search", None)
             body.pop("search_options", None)
             body.pop("tools", None)
+        else:
+            search_engine = self._resolve_gateway_search_engine()
+            if search_engine:
+                body["search_engine"] = search_engine
 
         return body

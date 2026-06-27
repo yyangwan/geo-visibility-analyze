@@ -21,6 +21,13 @@ from app.config import settings
 
 # Max rounds of tool_calls loop (safety guard against infinite loops)
 _MAX_TOOL_ROUNDS = 5
+_DEFAULT_SYSTEM_PROMPT = (
+    "你是 Kimi，一个由月之暗面（Moonshot AI）开发的人工智能助手。"
+    "你擅长中英文对话，能够基于上下文提供有帮助、无害且诚实的回答。"
+    "当需要获取实时信息时，你会主动调用搜索工具。"
+    "回答时先给出结论，再给出关键依据。"
+    "如使用搜索，请在回答末尾列出引用来源名称和 URL。"
+)
 
 
 class KimiAdapter(OpenAICompatAdapter):
@@ -39,18 +46,42 @@ class KimiAdapter(OpenAICompatAdapter):
         self._quota_exhausted_message: str | None = None
 
     def _build_request_body(self, prompt: str, messages: list | None = None) -> dict:
+        config = self.get_platform_config()
+        request_config = config.get("request", {}) if isinstance(config, dict) else {}
+        search_config = config.get("search", {}) if isinstance(config, dict) else {}
+        model = request_config.get("model") or config.get("model") or self.model
+        temperature = request_config.get("temperature", 0.6)
+        top_p = request_config.get("top_p", 0.95)
+        max_tokens = request_config.get("max_tokens", 8192)
+
         body = {
-            "model": self.model,
-            "messages": messages or [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-            "tools": [
+            "model": model,
+            "messages": messages or self._build_initial_messages(prompt),
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            # Kimi docs require thinking to be disabled when using $web_search.
+            "thinking": {"type": "disabled"},
+        }
+
+        if search_config.get("enable_search", True):
+            body["tool_choice"] = search_config.get("tool_choice", "auto")
+            body["tools"] = [
                 {
                     "type": "builtin_function",
                     "function": {"name": "$web_search"},
                 }
-            ],
-        }
+            ]
         return body
+
+    def _build_initial_messages(self, prompt: str) -> list[dict]:
+        config = self.get_platform_config()
+        request_config = config.get("request", {}) if isinstance(config, dict) else {}
+        system_prompt = request_config.get("system_prompt") or _DEFAULT_SYSTEM_PROMPT
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
 
     def _extract_error_message(self, resp: httpx.Response) -> str:
         """Extract a human-readable error from an API response."""
@@ -124,6 +155,52 @@ class KimiAdapter(OpenAICompatAdapter):
 
         return None
 
+    def _extract_web_search_metadata_from_tool_call(self, tool_call: dict) -> dict:
+        """Extract observable metadata from Kimi $web_search tool calls.
+
+        Kimi's builtin search usually returns a search_id instead of exposing
+        structured result URLs. Treat the presence of this tool call as the
+        reliable search-trigger signal.
+        """
+        if not isinstance(tool_call, dict):
+            return {}
+
+        function = tool_call.get("function", {})
+        if function.get("name") != "$web_search":
+            return {}
+
+        arguments = function.get("arguments", "")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                return {}
+
+        if not isinstance(arguments, dict):
+            return {}
+
+        search_result = arguments.get("search_result")
+        usage = arguments.get("usage")
+        metadata = {
+            "search_triggered": True,
+        }
+
+        if isinstance(search_result, dict):
+            search_id = search_result.get("search_id")
+            if search_id:
+                metadata["search_id"] = search_id
+
+        if isinstance(usage, dict):
+            total_tokens = usage.get("total_tokens")
+            if total_tokens is not None:
+                metadata["search_total_tokens"] = total_tokens
+
+        query = arguments.get("query")
+        if query:
+            metadata["search_query"] = query
+
+        return metadata
+
     async def _query_single(self, prompt: str) -> PlatformResponse:
         """Query Kimi with $web_search enabled.
 
@@ -143,6 +220,7 @@ class KimiAdapter(OpenAICompatAdapter):
             # Issue 2.3: Collect all API responses for complete raw_response
             all_responses: list[dict] = []
             search_query: str | None = None
+            web_search_metadata: dict = {}
             final_usage: dict = {}
 
             try:
@@ -159,7 +237,7 @@ class KimiAdapter(OpenAICompatAdapter):
                     )
 
                 client = await self._get_client()
-                messages = [{"role": "user", "content": prompt}]
+                messages = self._build_initial_messages(prompt)
 
                 for _round in range(_MAX_TOOL_ROUNDS):
                     # Build request body with current messages
@@ -272,12 +350,13 @@ class KimiAdapter(OpenAICompatAdapter):
                         # Issue 2.3: Build search_metadata with extracted search query
                         search_metadata = {
                             "search_enabled": True,
-                            "search_triggered": search_query is not None,
+                            "search_triggered": bool(web_search_metadata.get("search_triggered")),
                             "search_query": search_query,
                             "search_reasoning": None,
                             "search_results_count": 0,
                             "tool_call_rounds": len(all_responses) - 1,  # Exclude final response
                         }
+                        search_metadata.update(web_search_metadata)
 
                         return PlatformResponse(
                             platform=self.platform_name,
@@ -310,6 +389,9 @@ class KimiAdapter(OpenAICompatAdapter):
                             # Extract search query for metadata
                             if search_query is None:
                                 search_query = self._extract_search_query_from_tool_call(tool_call)
+                            web_search_metadata.update(
+                                self._extract_web_search_metadata_from_tool_call(tool_call)
+                            )
 
                         # Build tool response message
                         tool_call_args = tool_call["function"]["arguments"]

@@ -107,6 +107,7 @@ async def test_source_authority_trends_with_data(db_session: AsyncSession):
         db_session,
         prompt,
         cited_sources=[
+            {"domain": "source_S1", "authority_score": 3},
             {"domain": "source-a.com", "authority_score": 4},
             {"domain": "source-b.com", "authority_score": 2},
         ],
@@ -125,6 +126,77 @@ async def test_source_authority_trends_with_data(db_session: AsyncSession):
     source_a = next((d for d in result["domain_trends"] if d["domain"] == "source-a.com"), None)
     assert source_a is not None
     assert len(source_a["data"]) == 2
+    assert "source_S1" not in {d["domain"] for d in result["domain_trends"]}
+
+
+@pytest.mark.asyncio
+async def test_source_authority_trends_filters_by_audit_id(db_session: AsyncSession):
+    prompt = await _seed_prompt(db_session)
+
+    audit1 = await _create_audit_with_data(db_session, prompt, cited_sources=[])
+    audit2 = await _create_audit_with_data(db_session, prompt, cited_sources=[])
+    db_session.add_all(
+        [
+            SourceCitation(
+                project_id=PROJECT_ID,
+                audit_id=audit1.id,
+                domain="m.gafei.com",
+                urls=["https://m.gafei.com/old"],
+                citation_count=1,
+                platform="deepseek",
+            ),
+            SourceCitation(
+                project_id=PROJECT_ID,
+                audit_id=audit2.id,
+                domain="m.gafei.com",
+                urls=["https://m.gafei.com/new-1", "https://m.gafei.com/new-2"],
+                citation_count=2,
+                platform="deepseek",
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    result = await get_source_authority_trends(db_session, PROJECT_ID, limit=10, audit_id=audit2.id)
+
+    assert [audit["audit_id"] for audit in result["audits"]] == [audit2.id]
+    source = next((d for d in result["domain_trends"] if d["domain"] == "m.gafei.com"), None)
+    assert source is not None
+    assert source["data"] == [{"audit_id": audit2.id, "count": 2, "authority_avg": 3.0}]
+
+
+@pytest.mark.asyncio
+async def test_source_authority_trends_does_not_double_count_analysis_sources(
+    db_session: AsyncSession,
+):
+    prompt = await _seed_prompt(db_session)
+    audit = await _create_audit_with_data(
+        db_session,
+        prompt,
+        cited_sources=[{"domain": "m.gafei.com", "authority_score": 4}],
+    )
+    db_session.add(
+        SourceCitation(
+            project_id=PROJECT_ID,
+            audit_id=audit.id,
+            domain="m.gafei.com",
+            urls=["https://m.gafei.com/views-1", "https://m.gafei.com/views-2"],
+            citation_count=2,
+            platform="deepseek",
+        )
+    )
+    await db_session.flush()
+
+    result = await get_source_authority_trends(
+        db_session,
+        PROJECT_ID,
+        limit=10,
+        audit_id=audit.id,
+    )
+
+    source = next((d for d in result["domain_trends"] if d["domain"] == "m.gafei.com"), None)
+    assert source is not None
+    assert source["data"][0]["count"] == 2
 
 
 @pytest.mark.asyncio
@@ -183,7 +255,10 @@ async def test_multi_audit_comparison_with_data(db_session: AsyncSession):
     audit1 = await _create_audit_with_data(
         db_session,
         prompt,
-        cited_sources=[{"domain": "old-source.com", "authority_score": 3}],
+        cited_sources=[
+            {"domain": "source_S1", "authority_score": 3},
+            {"domain": "old-source.com", "authority_score": 3},
+        ],
     )
     report1 = Report(project_id=PROJECT_ID, audit_id=audit1.id, overall_score=60, mention_rate=0.5)
     db_session.add(report1)
@@ -204,10 +279,10 @@ async def test_multi_audit_comparison_with_data(db_session: AsyncSession):
     assert result["diffs"]["mention_rate_delta"] == pytest.approx(0.3, abs=0.01)
     assert "old-source.com" in result["diffs"]["source_changes"]["removed"]
     assert "new-source.com" in result["diffs"]["source_changes"]["added"]
+    assert "source_S1" not in result["diffs"]["source_changes"]["removed"]
 
 
 @pytest.mark.asyncio
 async def test_multi_audit_comparison_invalid_ids(db_session: AsyncSession):
     result = await get_multi_audit_comparison(db_session, PROJECT_ID, [9999, 8888])
     assert result["audits"] == []
-

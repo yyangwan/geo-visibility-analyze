@@ -25,11 +25,16 @@ async def test_get_default_config_deepseek():
     assert "request" in config
     assert "parsing" in config
     assert "gateway" in config
+    assert "grounding" in config
     assert config["search"]["enable_search"] is False
     assert config["search"]["search_options"] == {}
     assert config["gateway"]["base_url"] is None
     assert config["gateway"]["api_key"] is None
     assert config["gateway"]["model"] is None
+    assert config["gateway"]["search_engine"] == "bocha"
+    assert config["grounding"]["provider"] == "bocha"
+    assert config["grounding"]["search_count"] == 10
+    assert config["grounding"]["top_k"] == 8
     assert config["web"]["headers"]["Origin"] == "https://chat.deepseek.com"
     assert config["web"]["headers"]["Referer"] == "https://chat.deepseek.com/"
 
@@ -140,11 +145,17 @@ def test_default_platform_configs_reflect_calibration_baseline():
             "citation_format": "search_results",
         },
         "kimi": {
+            "capture_mode": "native_search",
             "search_enabled": True,
             "tools": ["web_search"],
+            "tool_choice": "auto",
             "citation_format": "tool_calls",
             "supports_multi_round_search": True,
             "search_tool_name": "$web_search",
+            "model": "kimi-k2.6",
+            "temperature": 0.6,
+            "max_tokens": 8192,
+            "top_p": 0.95,
         },
         "doubao": {
             "search_enabled": False,
@@ -157,6 +168,7 @@ def test_default_platform_configs_reflect_calibration_baseline():
         "hunyuan": {
             "search_enabled": False,
             "citation_format": "none",
+            "model": "hunyuan-turbos-latest",
         },
     }
 
@@ -166,13 +178,26 @@ def test_default_platform_configs_reflect_calibration_baseline():
         if "capture_mode" in expected:
             assert config["capture_mode"] == expected["capture_mode"]
 
-        assert config["request"]["temperature"] == 0.3
-        assert config["request"]["max_tokens"] is None
+        if platform == "kimi":
+            assert config["request"]["temperature"] == expected["temperature"]
+            assert config["request"]["model"] == expected["model"]
+            assert config["request"]["top_p"] == expected["top_p"]
+            assert config["request"]["max_tokens"] == expected["max_tokens"]
+            assert config["search"]["tool_choice"] == expected["tool_choice"]
+        elif platform == "hunyuan":
+            assert config["request"]["temperature"] == 0.3
+            assert config["request"]["model"] == expected["model"]
+            assert config["request"]["max_tokens"] is None
+        else:
+            assert config["request"]["temperature"] == 0.3
+            assert config["request"]["max_tokens"] is None
         assert config["search"]["enable_search"] is expected["search_enabled"]
         if platform == "deepseek":
             assert "gateway" in config
+            assert "grounding" in config
             assert config["gateway"]["base_url"] is None
-
+            assert config["gateway"]["search_engine"] == "bocha"
+            assert config["grounding"]["provider"] == "bocha"
         parsing = config["parsing"]
         assert parsing["citation_format"] == expected["citation_format"]
 

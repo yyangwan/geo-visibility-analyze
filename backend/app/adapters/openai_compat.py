@@ -51,6 +51,36 @@ class OpenAICompatAdapter(PlatformAdapter):
         headers.update(self.build_trace_headers())
         return headers
 
+    def _is_rate_limited_response(self, resp: httpx.Response) -> bool:
+        """Detect rate limits across OpenAI-compatible providers.
+
+        Some providers return rate-limit errors as HTTP 400 with an error code
+        instead of HTTP 429.
+        """
+        if resp.status_code == 429:
+            return True
+        if resp.status_code != 400:
+            return False
+
+        try:
+            data = resp.json()
+        except Exception:
+            return False
+
+        error = data.get("error") if isinstance(data, dict) else None
+        if not isinstance(error, dict):
+            return False
+
+        error_type = str(error.get("type", "")).lower()
+        error_code = str(error.get("code", "")).lower()
+        message = str(error.get("message", "")).lower()
+        return (
+            "rate_limit" in error_type
+            or "rate_limit" in error_code
+            or "rate limit" in message
+            or "请求频繁" in message
+        )
+
     async def query(self, prompts: list[str]) -> list[PlatformResponse]:
         tasks = [self._query_single(p) for p in prompts]
         return await asyncio.gather(*tasks)
@@ -175,7 +205,10 @@ class OpenAICompatAdapter(PlatformAdapter):
                         headers=self._build_headers(),
                         json=request_params,
                     )
-                    if resp.status_code != 429 or attempt == self._rate_limit_retries:
+                    if (
+                        not self._is_rate_limited_response(resp)
+                        or attempt == self._rate_limit_retries
+                    ):
                         break
                     await asyncio.sleep(2 ** attempt)
 
@@ -192,7 +225,7 @@ class OpenAICompatAdapter(PlatformAdapter):
                         request_params=request_params,
                     )
 
-                if resp.status_code == 429:
+                if self._is_rate_limited_response(resp):
                     return PlatformResponse(
                         platform=self.platform_name,
                         prompt=prompt,

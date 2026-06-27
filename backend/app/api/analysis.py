@@ -3,7 +3,7 @@
 import asyncio
 from collections import Counter
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +16,10 @@ from app.models.models import (
     PlatformResponseRecord,
     Prompt,
     ResponseAnalysis,
+    SourceCitation,
 )
 from app.services.response_analysis_service import retry_failed_analyses, run_analysis_for_audit
+from app.services.source_quality import clean_cited_sources, is_valid_source_domain, score_source_authority
 
 router = APIRouter()
 
@@ -108,20 +110,24 @@ async def retry_analysis(
 @router.get("/projects/{project_id}/content-intelligence", response_model=ContentIntelligenceOut)
 async def get_content_intelligence(
     project_id: str,
+    audit_id: int | None = Query(None),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get aggregated content intelligence data for a project's latest audit."""
+    """Get aggregated content intelligence data for a project's audit."""
     require_project_scope(current_user, project_id)
 
-    # Find latest completed/partial audit
-    audit_result = await db.execute(
+    audit_query = (
         select(Audit)
         .where(Audit.project_id == project_id)
         .where(Audit.status.in_(["completed", "partial"]))
-        .order_by(Audit.created_at.desc())
-        .limit(1)
     )
+    if audit_id is not None:
+        audit_query = audit_query.where(Audit.id == audit_id)
+    else:
+        audit_query = audit_query.order_by(Audit.created_at.desc()).limit(1)
+
+    audit_result = await db.execute(audit_query)
     audit = audit_result.scalar_one_or_none()
     if not audit:
         return ContentIntelligenceOut()
@@ -141,11 +147,20 @@ async def get_content_intelligence(
     )
     analyses = analyses_result.scalars().all()
 
+    # Structured citations are captured from platform responses during the audit
+    # and are more reliable for source display than later LLM text analysis.
+    citations_result = await db.execute(
+        select(SourceCitation)
+        .where(SourceCitation.project_id == project_id)
+        .where(SourceCitation.audit_id == audit.id)
+    )
+    citations = citations_result.scalars().all()
+
     # Aggregate server-side
     topic_counter: Counter = Counter()
     sentiment_counter: Counter = Counter()
     structure_counter: Counter = Counter()
-    source_agg: dict[str, dict] = {}  # domain -> {count, authority_sum}
+    source_agg: dict[str, dict] = {}  # domain -> {analysis_count, citation_count, authority_sum, authority_count}
     heatmap: dict[str, dict[str, str]] = {}  # platform -> {topic: sentiment}
     status_counter: Counter = Counter()
     total_prompt_tokens = 0
@@ -174,14 +189,18 @@ async def get_content_intelligence(
             structure_counter[a.answer_structure] += 1
 
         # Cited sources
-        for source in (a.cited_sources or []):
-            domain = source.get("domain", "")
-            if not domain:
-                continue
+        for source in clean_cited_sources(a.cited_sources):
+            domain = source["domain"]
             if domain not in source_agg:
-                source_agg[domain] = {"count": 0, "authority_sum": 0}
-            source_agg[domain]["count"] += 1
+                source_agg[domain] = {
+                    "analysis_count": 0,
+                    "citation_count": 0,
+                    "authority_sum": 0,
+                    "authority_count": 0,
+                }
+            source_agg[domain]["analysis_count"] += 1
             source_agg[domain]["authority_sum"] += source.get("authority_score", 3)
+            source_agg[domain]["authority_count"] += 1
 
         # Heatmap: platform -> topic -> sentiment
         prr = next((p for p in prrs if p.id == a.response_record_id), None)
@@ -192,13 +211,32 @@ async def get_content_intelligence(
                     heatmap[platform] = {}
                 heatmap[platform][topic] = a.brand_sentiment
 
+    for citation in citations:
+        domain = citation.domain or ""
+        if not is_valid_source_domain(domain):
+            continue
+        if domain not in source_agg:
+            source_agg[domain] = {
+                "analysis_count": 0,
+                "citation_count": 0,
+                "authority_sum": 0,
+                "authority_count": 0,
+            }
+        source_agg[domain]["citation_count"] += citation.citation_count or 1
+        authority_score = score_source_authority(domain, citation.urls or [])
+        if authority_score:
+            weight = citation.citation_count or 1
+            source_agg[domain]["authority_sum"] += authority_score * weight
+            source_agg[domain]["authority_count"] += weight
+
     # Build top cited sources
     top_sources = sorted(
         [
             {
                 "domain": domain,
-                "total_count": data["count"],
-                "authority_avg": round(data["authority_sum"] / data["count"], 1),
+                "total_count": data["citation_count"] or data["analysis_count"],
+                "authority_avg": round(data["authority_sum"] / data["authority_count"], 1)
+                if data["authority_count"] else 0.0,
             }
             for domain, data in source_agg.items()
         ],

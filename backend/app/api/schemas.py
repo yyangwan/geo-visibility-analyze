@@ -117,6 +117,7 @@ class SuggestionOut(BaseModel):
     id: int
     project_id: str
     report_id: int
+    audit_id: int | None = None
     category: str
     title: str
     description: str

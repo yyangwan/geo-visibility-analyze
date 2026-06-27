@@ -5,8 +5,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.adapters.kimi import KimiAdapter
-
-
 class _FakeResponse:
     def __init__(self, payload: dict, status_code: int = 429):
         self._payload = payload
@@ -212,6 +210,58 @@ class TestKimiAdapterStructure:
         assert hasattr(adapter, "_extract_search_query_from_tool_call")
         assert callable(getattr(adapter, "_extract_search_query_from_tool_call"))
 
+    def test_build_request_body_uses_native_search_defaults(self):
+        adapter = KimiAdapter()
+        adapter.set_platform_config(
+            {
+                "capture_mode": "native_search",
+                "search": {"enable_search": True, "tool_choice": "auto"},
+                "request": {
+                    "model": "kimi-k2.6",
+                    "temperature": 0.6,
+                    "top_p": 0.95,
+                    "max_tokens": 8192,
+                    "system_prompt": "你是 Kimi。",
+                },
+            }
+        )
+
+        body = adapter._build_request_body("手冲咖啡壶怎么选")
+
+        assert body["model"] == "kimi-k2.6"
+        assert body["temperature"] == 0.6
+        assert body["top_p"] == 0.95
+        assert body["max_tokens"] == 8192
+        assert body["tool_choice"] == "auto"
+        assert body["thinking"] == {"type": "disabled"}
+        assert body["tools"] == [
+            {
+                "type": "builtin_function",
+                "function": {"name": "$web_search"},
+            }
+        ]
+        assert body["messages"][0] == {"role": "system", "content": "你是 Kimi。"}
+        assert body["messages"][1]["role"] == "user"
+
+    def test_extract_web_search_metadata_from_search_id_tool_call(self):
+        adapter = KimiAdapter()
+        tool_call = {
+            "id": "t-web_search-1",
+            "type": "builtin_function",
+            "function": {
+                "name": "$web_search",
+                "arguments": '{"search_result":{"search_id":"abc123"},"usage":{"total_tokens":7981}}',
+            },
+        }
+
+        metadata = adapter._extract_web_search_metadata_from_tool_call(tool_call)
+
+        assert metadata == {
+            "search_triggered": True,
+            "search_id": "abc123",
+            "search_total_tokens": 7981,
+        }
+
 
 class TestSearchQueryEdgeCases:
     """Edge case tests for search query extraction."""
@@ -321,3 +371,57 @@ async def test_kimi_parse_error_is_preserved_without_failing_query(monkeypatch):
     assert result.parse_error is not None
     assert "ValueError" in result.parse_error
     assert "bad citation format" in result.parse_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Kimi must use Moonshot native $web_search, not Bocha grounded search")
+async def test_kimi_bocha_grounded_mode_uses_grounded_service(monkeypatch):
+    adapter = KimiAdapter()
+    adapter.set_platform_config(
+        {
+            "capture_mode": "bocha_grounded",
+            "grounding": {"search_count": 5, "top_k": 3, "max_per_domain": 1},
+            "request": {"temperature": 0.2, "max_tokens": 1200},
+        }
+    )
+    adapter.set_runtime_context({"audit_id": 7})
+
+    captured = {}
+
+    class _FakeGroundedService:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def query(self, prompts):
+            return [
+                PlatformResponse(
+                    platform="kimi",
+                    prompt=prompts[0],
+                    response_text="grounded answer [S1]",
+                    search_enabled=True,
+                    search_metadata={"grounding_mode": "bocha_grounded"},
+                )
+            ]
+
+    monkeypatch.setattr("app.adapters.kimi.GroundedAnswerService", _FakeGroundedService)
+
+    result = (await adapter.query(["手冲咖啡壶怎么选"]))[0]
+
+    assert result.response_text == "grounded answer [S1]"
+    assert captured["platform"] == "kimi"
+    assert captured["platform_config"]["capture_mode"] == "bocha_grounded"
+    assert captured["trace_headers"]["X-Audit-Id"] == "7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="Kimi must use Moonshot native $web_search, not Bocha grounded search")
+async def test_kimi_bocha_grounded_health_check_requires_bocha_key(monkeypatch):
+    adapter = KimiAdapter()
+    adapter.set_platform_config({"capture_mode": "bocha_grounded"})
+    adapter.api_key = "kimi-key"
+
+    monkeypatch.setattr("app.adapters.kimi.settings.bocha_api_key", "")
+    assert await adapter.health_check() is False
+
+    monkeypatch.setattr("app.adapters.kimi.settings.bocha_api_key", "bocha-key")
+    assert await adapter.health_check() is True
