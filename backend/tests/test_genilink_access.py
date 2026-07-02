@@ -4,7 +4,14 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.access import require_project_scope, require_workspace_scope
+from app.config import Settings
 from app.services import genilink_auth
+
+
+def test_default_jwks_url_uses_reachable_apex_domain():
+    settings = Settings(_env_file=None, secret_key="test-secret")
+
+    assert settings.genilink_jwks_url == "https://genilink.cn/.well-known/jwks.json"
 
 
 def test_require_project_scope_accepts_exact_pid():

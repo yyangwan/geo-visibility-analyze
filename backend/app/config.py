@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = ""
     access_token_expire_minutes: int = 1440  # 24h
-    genilink_jwks_url: str = "https://app.genilink.cn/.well-known/jwks.json"
+    genilink_jwks_url: str = "https://genilink.cn/.well-known/jwks.json"
     genilink_issuer: str = "https://app.genilink.cn"
     genilink_audience: str = "visibility.genilink.cn"
 
