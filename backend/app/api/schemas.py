@@ -270,3 +270,66 @@ class AuditComparisonSnapshot(BaseModel):
 class MultiAuditComparisonOut(BaseModel):
     audits: list[AuditComparisonSnapshot] = []
     diffs: dict = {}
+
+
+# --- Product Website Analysis ---
+class ProductWebsiteProjectContext(BaseModel):
+    name: str = ""
+    url: str = ""
+    industry: str = ""
+    product_name: str = ""
+    product_keywords: list[str] = Field(default_factory=list)
+    product_description: str = ""
+    product_url: str = ""
+
+
+class ProductWebsiteBrandContext(BaseModel):
+    id: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    is_competitor: bool = False
+
+
+class ProductWebsiteAnalyzeOptions(BaseModel):
+    enable_ai_citation: bool | None = None
+    crawler_provider: str | None = None
+
+
+class ProductWebsiteAnalyzeRequest(BaseModel):
+    project_id: str
+    workspace_id: str
+    target_url: str
+    project: ProductWebsiteProjectContext = Field(default_factory=ProductWebsiteProjectContext)
+    brands: list[ProductWebsiteBrandContext] = Field(default_factory=list)
+    options: ProductWebsiteAnalyzeOptions = Field(default_factory=ProductWebsiteAnalyzeOptions)
+
+
+class ProductWebsiteAnalyzeCreated(BaseModel):
+    id: int
+    analysisId: int
+    status: str
+    stage: str
+
+
+class ProductWebsiteAnalysisOut(BaseModel):
+    id: int
+    project_id: str
+    workspace_id: str
+    target_url: str
+    final_url: str | None = None
+    normalized_domain: str | None = None
+    status: str
+    stage: str
+    error_code: str | None = None
+    error_message: str | None = None
+    attempt_count: int = 0
+    score_overall: float | None = None
+    score_grade: str | None = None
+    input_snapshot: dict = Field(default_factory=dict)
+    result_snapshot: dict | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

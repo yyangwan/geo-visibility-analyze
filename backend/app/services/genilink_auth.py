@@ -4,17 +4,14 @@ No local user provisioning — pure JWT validation.
 User context comes entirely from 智鏈 JWT claims.
 """
 
-import os
-
 import httpx
 from jose import JWTError, jwt
 
-GENILINK_JWKS_URL = os.getenv(
-    "GENILINK_JWKS_URL",
-    "https://app.genilink.cn/.well-known/jwks.json",
-)
-GENILINK_ISSUER = os.getenv("GENILINK_ISSUER", "https://app.genilink.cn")
-SERVICE_AUDIENCE = os.getenv("GENILINK_AUDIENCE", "visibility.genilink.cn")
+from app.config import settings
+
+GENILINK_JWKS_URL = settings.genilink_jwks_url
+GENILINK_ISSUER = settings.genilink_issuer
+SERVICE_AUDIENCE = settings.genilink_audience
 
 # Cache JWKS for 1 hour
 _jwks_cache: dict | None = None
@@ -50,7 +47,10 @@ async def verify_genilink_token(token: str) -> dict | None:
         if not kid:
             return None
 
-        jwks = await _fetch_jwks()
+        try:
+            jwks = await _fetch_jwks()
+        except httpx.HTTPError:
+            return None
         rsa_key = next((key for key in jwks.get("keys", []) if key.get("kid") == kid), None)
 
         # If the key was rotated, refresh once before giving up.

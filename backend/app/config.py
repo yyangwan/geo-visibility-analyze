@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # Analysis settings
     analysis_timeout_seconds: int = 120
 
+    # Product website crawler settings
+    product_website_crawler_provider: str = "native"
+    product_website_crawler_timeout_seconds: int = 30
+    firecrawl_api_key: str = ""
+    firecrawl_base_url: str = "https://api.firecrawl.dev"
+    firecrawl_wait_for_ms: int = 1000
+    firecrawl_max_age_ms: int = 172800000
+    product_website_ai_citation_enabled: bool = False
+    product_website_ai_citation_platforms: str = "deepseek,doubao,hunyuan,qwen,kimi"
+    product_website_ai_citation_prompt_limit: int = 2
+
     # LLM for internal tasks (prompt gen, suggestions). Defaults to DeepSeek.
     llm_api_key: str = ""
     llm_base_url: str = ""
@@ -76,6 +87,9 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = ""
     access_token_expire_minutes: int = 1440  # 24h
+    genilink_jwks_url: str = "https://app.genilink.cn/.well-known/jwks.json"
+    genilink_issuer: str = "https://app.genilink.cn"
+    genilink_audience: str = "visibility.genilink.cn"
 
     # Timezone for scheduler (default: China Standard Time)
     tz: str = "Asia/Shanghai"

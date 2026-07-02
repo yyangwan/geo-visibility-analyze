@@ -58,6 +58,19 @@ async def test_verify_genilink_token_refreshes_jwks_on_unknown_kid(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_verify_genilink_token_returns_none_when_jwks_fetch_fails(monkeypatch):
+    async def fake_fetch_jwks():
+        raise genilink_auth.httpx.ConnectError("dns failed")
+
+    monkeypatch.setattr(genilink_auth, "_fetch_jwks", fake_fetch_jwks)
+    monkeypatch.setattr(genilink_auth.jwt, "get_unverified_header", lambda token: {"kid": "genilink-v1"})
+
+    payload = await genilink_auth.verify_genilink_token("token")
+
+    assert payload is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_jwks_disables_proxy_settings(monkeypatch):
     captured = {}
 

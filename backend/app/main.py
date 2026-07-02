@@ -9,6 +9,7 @@ from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
 from app.api.integration import router as integration_router
 from app.api.platforms import router as platforms_router
+from app.api.product_website import router as product_website_router
 from app.api.prompts import router as prompts_router
 from app.api.reports import router as reports_router
 from app.api.schedules import router as schedules_router
@@ -42,6 +43,7 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(platforms_router, prefix="/api/platforms", tags=["platforms"])
+app.include_router(product_website_router, prefix="/api/product-website", tags=["product-website"])
 app.include_router(prompts_router, prefix="/api/prompts", tags=["prompts"])
 app.include_router(audits_router, prefix="/api/audits", tags=["audits"])
 app.include_router(analysis_router, prefix="/api/analysis", tags=["analysis"])

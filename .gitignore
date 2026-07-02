@@ -36,6 +36,7 @@ postgres-data/
 
 # Logs
 *.log
+*.log.*
 
 # Playwright
 /test-results/

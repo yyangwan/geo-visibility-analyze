@@ -416,3 +416,106 @@ class PlatformConfig(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ProductWebsiteAnalysis(Base):
+    __tablename__ = "product_website_analyses"
+    __table_args__ = (
+        Index("ix_pwa_project_id", "project_id"),
+        Index("ix_pwa_workspace_id", "workspace_id"),
+        Index("ix_pwa_project_created", "project_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    final_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False)
+    stage: Mapped[str] = mapped_column(String(50), default="queued", nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    input_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    result_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    score_overall: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_grade: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    stage_runs: Mapped[list["ProductWebsiteStageRun"]] = relationship(
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+    )
+    crawl_logs: Mapped[list["ProductWebsiteCrawlLog"]] = relationship(
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+    )
+    event_logs: Mapped[list["ProductWebsiteEventLog"]] = relationship(
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+    )
+
+
+class ProductWebsiteStageRun(Base):
+    __tablename__ = "product_website_stage_runs"
+    __table_args__ = (
+        Index("ix_pwsr_analysis_id", "analysis_id"),
+        Index("ix_pwsr_analysis_stage", "analysis_id", "stage_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(Integer, ForeignKey("product_website_analyses.id", ondelete="CASCADE"))
+    stage_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    output_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    analysis: Mapped["ProductWebsiteAnalysis"] = relationship(back_populates="stage_runs")
+
+
+class ProductWebsiteCrawlLog(Base):
+    __tablename__ = "product_website_crawl_logs"
+    __table_args__ = (
+        Index("ix_pwcl_analysis_id", "analysis_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(Integer, ForeignKey("product_website_analyses.id", ondelete="CASCADE"))
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    final_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    method: Mapped[str] = mapped_column(String(50), default="native_fetch")
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_length: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    analysis: Mapped["ProductWebsiteAnalysis"] = relationship(back_populates="crawl_logs")
+
+
+class ProductWebsiteEventLog(Base):
+    __tablename__ = "product_website_events"
+    __table_args__ = (
+        Index("ix_pwe_analysis_id", "analysis_id"),
+        Index("ix_pwe_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_id: Mapped[int] = mapped_column(Integer, ForeignKey("product_website_analyses.id", ondelete="CASCADE"))
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    analysis: Mapped["ProductWebsiteAnalysis"] = relationship(back_populates="event_logs")

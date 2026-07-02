@@ -3,7 +3,7 @@
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Audit, Report, ScheduledJob, Suggestion
+from app.models.models import Audit, ProductWebsiteAnalysis, Report, ScheduledJob, Suggestion
 
 
 def require_workspace_scope(current_user: dict) -> None:
@@ -75,3 +75,15 @@ async def get_schedule_for_project(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled job not found")
     require_project_scope(current_user, job.project_id)
     return job
+
+
+async def get_product_website_analysis_for_project(
+    db: AsyncSession,
+    current_user: dict,
+    analysis_id: int,
+) -> ProductWebsiteAnalysis:
+    analysis = await db.get(ProductWebsiteAnalysis, analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product website analysis not found")
+    require_project_scope(current_user, analysis.project_id)
+    return analysis
