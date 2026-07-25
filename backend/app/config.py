@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     genilink_issuer: str = "https://app.genilink.cn"
     genilink_audience: str = "visibility.genilink.cn"
 
+    # Outbound mobile device gateways
+    device_gateway_token: str = ""
+    device_gateway_ids: str = ""
+    device_gateway_lease_seconds: int = 120
+
     # Timezone for scheduler (default: China Standard Time)
     tz: str = "Asia/Shanghai"
 

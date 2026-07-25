@@ -7,6 +7,10 @@ services:
     volumes: []
     command: []
     restart: unless-stopped
+    environment:
+      AISCOPE_DEVICE_GATEWAY_TOKEN: ${AISCOPE_DEVICE_GATEWAY_TOKEN:?AISCOPE_DEVICE_GATEWAY_TOKEN must be set}
+      AISCOPE_DEVICE_GATEWAY_IDS: ${AISCOPE_DEVICE_GATEWAY_IDS:-CHAO}
+      AISCOPE_DEVICE_GATEWAY_LEASE_SECONDS: ${AISCOPE_DEVICE_GATEWAY_LEASE_SECONDS:-120}
 
   frontend:
     volumes: []

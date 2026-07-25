@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from app.config import settings
 from app.database import Base
 from app.models import models  # noqa: F401 - register models with Base
+from app.models import device_gateway  # noqa: F401 - register models with Base
 
 config = context.config
 

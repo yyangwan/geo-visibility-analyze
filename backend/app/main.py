@@ -8,6 +8,7 @@ from app.api.audits import router as audits_router
 from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
 from app.api.integration import router as integration_router
+from app.api.device_gateway import gateway_router, task_router
 from app.api.platforms import router as platforms_router
 from app.api.product_website import router as product_website_router
 from app.api.prompts import router as prompts_router
@@ -53,6 +54,12 @@ app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 app.include_router(suggestions_router, prefix="/api/suggestions", tags=["suggestions"])
 app.include_router(strategic_router, prefix="/api/strategic", tags=["strategic"])
 app.include_router(integration_router, prefix="/api/integration", tags=["integration"])
+app.include_router(task_router, prefix="/api/device-tasks", tags=["device-tasks"])
+app.include_router(
+    gateway_router,
+    prefix="/api/device-gateway",
+    tags=["device-gateway"],
+)
 
 
 @app.on_event("startup")
