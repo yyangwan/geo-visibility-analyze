@@ -249,7 +249,7 @@ class KimiAdapter(OpenAICompatAdapter):
                     for attempt in range(self._rate_limit_retries + 1):
                         resp = await client.post(
                             f"{self.base_url}/chat/completions",
-                            headers={"Authorization": f"Bearer {self.api_key}"},
+                            headers=self._build_headers(),
                             json=current_request,
                         )
                         if resp.status_code != 429:

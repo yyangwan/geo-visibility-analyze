@@ -61,7 +61,7 @@ class DoubaoAdapter(OpenAICompatAdapter):
                 for attempt in range(self._rate_limit_retries + 1):
                     resp = await client.post(
                         f"{self.base_url}/responses",
-                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        headers=self._build_headers(),
                         json=self._build_responses_body(prompt),
                     )
                     if resp.status_code != 429 or attempt == self._rate_limit_retries:

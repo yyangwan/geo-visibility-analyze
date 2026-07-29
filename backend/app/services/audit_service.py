@@ -82,6 +82,13 @@ def is_degraded_response(resp: PlatformResponse) -> bool:
     return bool(metadata.get("response_degraded"))
 
 
+def all_platform_queries_auth_failed(
+    outcomes: list[tuple[str, PlatformResponse]],
+) -> bool:
+    """Return whether every platform outcome failed because auth is missing."""
+    return bool(outcomes) and all(resp.error_code == ErrorCode.AUTH_FAILED for _, resp in outcomes)
+
+
 async def _next_stage_attempt_no(db: AsyncSession, audit_id: int, stage_name: str) -> int:
     result = await db.execute(
         select(func.coalesce(func.max(AuditStageRun.attempt_no), 0)).where(
@@ -804,7 +811,12 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     total = len(all_responses)
     if error_count == total:
         audit.status = QueryStatus.FAILED
-        audit.error_message = "All platform queries failed"
+        if all_platform_queries_auth_failed(all_responses):
+            audit.error_message = "Platform API keys are not configured"
+            audit.recoverable_error = True
+            audit.error_code = ErrorCode.AUTH_FAILED.value
+        else:
+            audit.error_message = "All platform queries failed"
         final_run_status = RunStatus.FAILED
     elif error_count > 0:
         audit.status = QueryStatus.PARTIAL

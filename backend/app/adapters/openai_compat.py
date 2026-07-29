@@ -47,7 +47,10 @@ class OpenAICompatAdapter(PlatformAdapter):
         return self._client
 
     def _build_headers(self) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers: dict[str, str] = {}
+        api_key = (self.api_key or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         headers.update(self.build_trace_headers())
         return headers
 

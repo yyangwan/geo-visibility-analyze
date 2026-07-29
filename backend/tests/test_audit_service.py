@@ -43,6 +43,24 @@ def test_is_degraded_response_allows_complete_response():
     assert audit_service.is_degraded_response(resp) is False
 
 
+def test_all_platform_queries_auth_failed_detects_missing_keys():
+    outcomes = [
+        ("deepseek", PlatformResponse(platform="deepseek", prompt="p1", response_text="", error_code=audit_service.ErrorCode.AUTH_FAILED)),
+        ("kimi", PlatformResponse(platform="kimi", prompt="p2", response_text="", error_code=audit_service.ErrorCode.AUTH_FAILED)),
+    ]
+
+    assert audit_service.all_platform_queries_auth_failed(outcomes) is True
+
+
+def test_all_platform_queries_auth_failed_rejects_other_failures():
+    outcomes = [
+        ("deepseek", PlatformResponse(platform="deepseek", prompt="p1", response_text="", error_code=audit_service.ErrorCode.AUTH_FAILED)),
+        ("kimi", PlatformResponse(platform="kimi", prompt="p2", response_text="", error_code=audit_service.ErrorCode.UNKNOWN)),
+    ]
+
+    assert audit_service.all_platform_queries_auth_failed(outcomes) is False
+
+
 async def _create_prompt(db, project_id: str, text: str):
     prompt = Prompt(project_id=project_id, text=text)
     db.add(prompt)
