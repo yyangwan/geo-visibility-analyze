@@ -178,9 +178,19 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
         evidence_context=evidence_block,
     )
 
+    fallback_mode = False
     stubs = await _call_llm(pass1_prompt, system=_PASS1_SYSTEM)
     if not stubs:
-        return []
+        stubs = _build_fallback_suggestion_stubs(
+            report=report,
+            competitors=competitors,
+        )
+        if not stubs:
+            return []
+        logger.info("Using deterministic fallback suggestions for report %s", report.id)
+        fallback_mode = True
+
+    use_stub_details_only = fallback_mode or not _has_llm_config()
     if not isinstance(stubs, list):
         logger.warning("Pass 1 returned non-list suggestions: %s", type(stubs))
         return []
@@ -192,14 +202,16 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
         if not isinstance(stub, dict):
             logger.warning("Skipping non-dict suggestion stub: %s", type(stub))
             continue
-        detail = await _expand_detail(
-            stub=stub,
-            project_info=project_info,
-            platform_scores=platform_scores,
-            competitor_info=competitor_info,
-            analysis_context=analysis_context,
-            evidence_context=evidence_context,
-        )
+        detail = None
+        if not use_stub_details_only:
+            detail = await _expand_detail(
+                stub=stub,
+                project_info=project_info,
+                platform_scores=platform_scores,
+                competitor_info=competitor_info,
+                analysis_context=analysis_context,
+                evidence_context=evidence_context,
+            )
         logger.info(f"Pass 2 for '{stub.get('title', '?')[:20]}': detail={'found' if detail else 'None'}")
 
         s = Suggestion(
@@ -220,6 +232,177 @@ async def generate_suggestions(db: AsyncSession, report: Report) -> list[Suggest
             await db.refresh(s)
 
     return suggestions
+
+
+def _has_llm_config() -> bool:
+    api_key, _, _ = settings.get_llm_config()
+    return bool(api_key)
+
+
+def _build_fallback_suggestion_stubs(
+    *,
+    report: Report,
+    competitors: list[str],
+) -> list[dict]:
+    """Build deterministic suggestions when no LLM is available."""
+    platform_scores = {
+        platform: score
+        for platform, score in (report.platform_scores or {}).items()
+        if isinstance(score, (int, float))
+    }
+    ranked_platforms = sorted(platform_scores.items(), key=lambda item: item[1])
+
+    stubs: list[dict] = []
+    for platform, score in ranked_platforms[:2]:
+        label = _platform_label(platform)
+        rounded_score = int(round(score))
+        stubs.append(
+            {
+                "category": "platform_focus",
+                "title": f"补强 {label} 的低分场景",
+                "description": f"{label} 当前得分 {rounded_score}，优先补齐高频问题、对比页和 FAQ。",
+                "priority": "high" if rounded_score < 40 else "medium",
+                "target_platforms": [platform],
+                "evidence_channels": [label],
+                "action_channels": ["官网", "FAQ"],
+                "action_type": "发布 FAQ / 对比页",
+                "audit_findings": [f"{label} 当前得分 {rounded_score}，存在可见性缺口"],
+                "evidence_summary": f"基于 {label} 审计结果的兜底建议",
+                "success_metric": f"{label} 的品牌提及率提升",
+                "outline": [
+                    "回答高频问题",
+                    "补充可引用的事实和数据",
+                    "加入竞品对比和结构化数据",
+                ],
+                "keywords": [label, "FAQ", "对比页"],
+                "weekly_tasks": [
+                    {"week": "Week 1", "task": f"整理 {label} 的低分场景和高频问题"},
+                    {"week": "Week 2", "task": "发布 FAQ / 对比页并补充结构化数据"},
+                ],
+                "competitor_ref": f"重点对比：{', '.join(competitors)}" if competitors else "",
+                "expected_outcome": f"{label} 的推荐位和提及率提升",
+                "measurement_plan": f"复测 {label} 的相关 prompt 命中率和推荐率",
+                "acceptance_criteria": [
+                    "完成一篇可直接引用的内容",
+                    "页面可被 AI 平台检索和引用",
+                    "下次审计能看到提及率提升",
+                ],
+            }
+        )
+
+    if report.competitor_rank and report.competitor_rank > 1:
+        stubs.append(
+            {
+                "category": "competitive_strategy",
+                "title": "补一页竞品对比内容",
+                "description": f"当前竞品排名第 {report.competitor_rank}，建议增加官网对比页和案例页，抢回推荐位。",
+                "priority": "high",
+                "target_platforms": list(platform_scores.keys())[:2],
+                "evidence_channels": ["官网", "对比页"],
+                "action_channels": ["官网", "FAQ"],
+                "action_type": "创建竞品对比页",
+                "audit_findings": [f"当前竞品排名第 {report.competitor_rank}"],
+                "evidence_summary": "基于当前审计排名的兜底建议",
+                "success_metric": "竞品排名下降，品牌推荐位前移",
+                "outline": [
+                    "对比核心能力",
+                    "列出常见问题答案",
+                    "补充案例和数据证明",
+                ],
+                "keywords": ["竞品对比", "案例", "FAQ"],
+                "weekly_tasks": [
+                    {"week": "Week 1", "task": "整理竞品差异和可引用证据"},
+                    {"week": "Week 2", "task": "上线对比页并补充案例"},
+                ],
+                "competitor_ref": f"参考 {', '.join(competitors)}" if competitors else "",
+                "expected_outcome": "AI 平台更容易推荐本品牌对比页",
+                "measurement_plan": "复测对比类 prompt 的提及率和推荐率",
+                "acceptance_criteria": [
+                    "有一页明确的竞品对比内容",
+                    "页面包含可引用的事实和数据",
+                    "下次审计能验证效果",
+                ],
+            }
+        )
+
+    if report.insights:
+        insight = str(report.insights[0]).strip()
+        if insight:
+            stubs.append(
+                {
+                    "category": "content_optimization",
+                    "title": "把当前洞察落成一篇内容",
+                    "description": insight,
+                    "priority": "medium",
+                    "target_platforms": list(platform_scores.keys())[:1],
+                    "evidence_channels": ["官网", "博客"],
+                    "action_channels": ["官网", "博客"],
+                    "action_type": "发布洞察复用内容",
+                    "audit_findings": [insight],
+                    "evidence_summary": "来自现有审计洞察的兜底建议",
+                    "success_metric": "洞察相关 prompt 的品牌提及率提升",
+                    "outline": [
+                        "把洞察拆成用户问题",
+                        "补充可引用来源",
+                        "加入结构化标题和 FAQ",
+                    ],
+                    "keywords": ["洞察", "内容复用", "FAQ"],
+                    "weekly_tasks": [
+                        {"week": "Week 1", "task": "把洞察拆成可执行内容提纲"},
+                        {"week": "Week 2", "task": "完成内容发布和内链补充"},
+                    ],
+                    "expected_outcome": "让当前洞察更容易被 AI 平台引用",
+                    "measurement_plan": "复测洞察相关 prompt 的提及变化",
+                    "acceptance_criteria": [
+                        "内容能直接回答高频问题",
+                        "包含可引用的事实和来源",
+                        "发布后可进入下一次审计验证",
+                    ],
+                }
+            )
+
+    if not stubs:
+        stubs.append(
+            {
+                "category": "content_optimization",
+                "title": "补一篇可被 AI 引用的 FAQ",
+                "description": "当前没有可直接复用的 LLM 建议时，先补一篇 FAQ / 对比页，避免页面为空。",
+                "priority": "medium",
+                "target_platforms": list(platform_scores.keys())[:1],
+                "evidence_channels": ["官网"],
+                "action_channels": ["官网", "FAQ"],
+                "action_type": "发布 FAQ / 对比页",
+                "audit_findings": ["当前建议服务未拿到 LLM 输出"],
+                "evidence_summary": "兜底建议，确保页面有内容可看",
+                "success_metric": "页面不再为空，后续可继续优化",
+                "outline": ["回答高频问题", "补充案例", "加入引用来源"],
+                "keywords": ["FAQ", "对比页"],
+                "weekly_tasks": [
+                    {"week": "Week 1", "task": "整理高频问题"},
+                    {"week": "Week 2", "task": "发布 FAQ 页面"},
+                ],
+                "expected_outcome": "至少有一条可执行建议",
+                "measurement_plan": "下次审计时检查是否已有内容可引用",
+                "acceptance_criteria": [
+                    "生成页面至少一条建议",
+                    "建议包含明确动作",
+                    "后续可继续按 LLM 建议升级",
+                ],
+            }
+        )
+
+    return stubs[:3]
+
+
+def _platform_label(platform: str) -> str:
+    return {
+        "deepseek": "DeepSeek",
+        "qwen": "Qwen",
+        "doubao": "Doubao",
+        "kimi": "Kimi",
+        "hunyuan": "Hunyuan",
+        "wenxin": "Wenxin",
+    }.get(platform, platform[:1].upper() + platform[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +700,13 @@ def _merge_detail_with_stub(detail: dict | None, stub: dict) -> dict:
         "audit_findings",
         "evidence_summary",
         "success_metric",
+        "outline",
+        "keywords",
+        "weekly_tasks",
+        "competitor_ref",
+        "expected_outcome",
+        "measurement_plan",
+        "acceptance_criteria",
     ):
         if key not in merged and key in stub:
             merged[key] = stub[key]

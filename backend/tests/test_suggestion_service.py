@@ -102,6 +102,30 @@ async def test_generate_suggestions_sends_evidence_to_both_passes(
     assert suggestions[0].detail["success_metric"] == "DeepSeek推荐类prompt提及率提升到50%"
 
 
+@pytest.mark.asyncio
+async def test_generate_suggestions_falls_back_when_llm_is_unavailable(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _audit, report = await _seed_suggestion_audit(db_session)
+
+    async def fake_call_llm(prompt: str, *, system: str, expect_array: bool = True):
+        return []
+
+    monkeypatch.setattr(suggestion_service, "_call_llm", fake_call_llm)
+
+    suggestions = await generate_suggestions(db_session, report)
+
+    assert len(suggestions) == 3
+    assert "DeepSeek" in suggestions[0].title
+    assert "Kimi" in suggestions[1].title
+    assert "竞品" in suggestions[2].title
+    assert "FAQ" in suggestions[0].detail["action_type"]
+    assert suggestions[0].detail["weekly_tasks"][0]["week"] == "Week 1"
+    assert "CompetitorX" in suggestions[2].detail["competitor_ref"]
+    assert "Kimi" in suggestions[1].detail["audit_findings"][0]
+
+
 async def _seed_suggestion_audit(db: AsyncSession) -> tuple[Audit, Report]:
     prompt_gap = Prompt(project_id="project-1", text="推荐AI分析工具")
     prompt_win = Prompt(project_id="project-1", text="Acme适合什么团队")
