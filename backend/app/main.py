@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +20,7 @@ from app.config import settings
 from app.logging_config import get_logger, setup_logging
 from app.middleware import RequestLoggingMiddleware
 from app.models.models import Base
+from app.utils.timezone import utcnow
 
 # Initialize structured logging
 debug = os.getenv("AISCOPE_DEBUG", "0") == "1"
@@ -147,7 +147,7 @@ async def _recover_orphan_audits():
         for audit in running_audits:
             audit.status = QueryStatus.FAILED
             audit.error_message = "Server restarted - audit cancelled"
-            audit.completed_at = datetime.now(timezone.utc)
+            audit.completed_at = utcnow()
         if running_audits:
             await db.commit()
             logger.warning("running_audits_recovered", count=len(running_audits))

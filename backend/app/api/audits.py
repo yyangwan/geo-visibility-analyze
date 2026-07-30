@@ -26,6 +26,7 @@ from app.services.audit_events import PlatformEvent, subscribe, unsubscribe
 from app.services.audit_service import run_audit
 from app.services.report_service import generate_report
 from app.services.genilink_auth import verify_genilink_token
+from app.utils.timezone import utc_isoformat
 
 router = APIRouter()
 
@@ -36,7 +37,7 @@ def _sse_event(event_type: str, data: dict) -> str:
 
 
 def _dt(value):
-    return value.isoformat() if value else None
+    return utc_isoformat(value)
 
 
 def _serialize_audit(audit: Audit) -> dict:

@@ -11,7 +11,7 @@ import re
 import time
 from urllib.robotparser import RobotFileParser
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -32,6 +32,7 @@ from app.services.product_website_ai_citations import (
     run_product_website_citation_check,
 )
 from app.services.product_website_crawler import get_product_website_crawler
+from app.utils.timezone import utcnow
 
 
 @dataclass
@@ -1864,7 +1865,7 @@ async def run_product_website_analysis(analysis_id: int) -> None:
         analysis.attempt_count += 1
         analysis.status = "fetching"
         analysis.stage = "fetching"
-        analysis.started_at = analysis.started_at or datetime.now(timezone.utc)
+        analysis.started_at = analysis.started_at or utcnow()
         await _log_event(db, analysis.id, "stage_started", "fetching")
         await db.commit()
 
@@ -1906,7 +1907,7 @@ async def run_product_website_analysis(analysis_id: int) -> None:
             analysis.stage = "failed"
             analysis.error_code = "CRAWL_FAILED"
             analysis.error_message = error or "HTML content is too short"
-            analysis.completed_at = datetime.now(timezone.utc)
+            analysis.completed_at = utcnow()
             await _log_event(db, analysis.id, "analysis_failed", "fetching", {"error": analysis.error_message})
             await db.commit()
             return
@@ -1968,7 +1969,7 @@ async def run_product_website_analysis(analysis_id: int) -> None:
             analysis.score_grade = snapshot["score"]["grade"]
             analysis.status = "completed"
             analysis.stage = "completed"
-            analysis.completed_at = datetime.now(timezone.utc)
+            analysis.completed_at = utcnow()
             db.add(ProductWebsiteStageRun(
                 analysis_id=analysis.id,
                 stage_name="analysis",
@@ -1986,6 +1987,6 @@ async def run_product_website_analysis(analysis_id: int) -> None:
             analysis.stage = "failed"
             analysis.error_code = "ANALYSIS_FAILED"
             analysis.error_message = str(exc)
-            analysis.completed_at = datetime.now(timezone.utc)
+            analysis.completed_at = utcnow()
             await _log_event(db, analysis.id, "analysis_failed", "extracting", {"error": analysis.error_message})
             await db.commit()

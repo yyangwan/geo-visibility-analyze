@@ -8,6 +8,7 @@ from app.api.access import require_project_scope
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.models import Audit, Report
+from app.utils.timezone import utc_isoformat
 
 router = APIRouter()
 
@@ -99,8 +100,8 @@ async def get_audits_history(
             "id": a.id,
             "status": a.status.value,
             "platforms": a.platforms_json,
-            "created_at": a.created_at.isoformat() if a.created_at else None,
-            "completed_at": a.completed_at.isoformat() if a.completed_at else None,
+            "created_at": utc_isoformat(a.created_at),
+            "completed_at": utc_isoformat(a.completed_at),
             "error_message": a.error_message,
         }
         for a in audits

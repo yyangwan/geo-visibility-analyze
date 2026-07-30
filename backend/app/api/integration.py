@@ -17,6 +17,7 @@ from app.models.models import (
     Report,
     Suggestion,
 )
+from app.utils.timezone import utc_isoformat
 
 router = APIRouter()
 
@@ -133,5 +134,5 @@ async def integration_summary(
         "platformCoverage": platform_coverage,
         "competitorRank": competitor_rank,
         "suggestions": suggestions,
-        "latestAuditDate": latest_audit.created_at.isoformat() if latest_audit else None,
+        "latestAuditDate": utc_isoformat(latest_audit.created_at) if latest_audit else None,
     }

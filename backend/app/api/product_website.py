@@ -20,6 +20,7 @@ from app.api.schemas import (
 from app.database import get_db
 from app.models.models import ProductWebsiteAnalysis, ProductWebsiteEventLog
 from app.services.product_website_analysis_service import run_product_website_analysis
+from app.utils.timezone import utc_isoformat
 
 router = APIRouter()
 
@@ -706,7 +707,7 @@ async def product_website_trends(
     points = [
         {
             "analysisId": row.id,
-            "date": row.completed_at.isoformat() if row.completed_at else row.created_at.isoformat(),
+            "date": utc_isoformat(row.completed_at or row.created_at),
             "overall": row.score_overall,
             "grade": row.score_grade,
             "dimensions": (row.result_snapshot or {}).get("score", {}).get("dimensions", {}),
@@ -784,7 +785,7 @@ async def product_website_events(
             yield _sse_event(event.event_type, {
                 "stage": event.stage,
                 "payload": event.payload or {},
-                "created_at": event.created_at.isoformat() if event.created_at else None,
+                "created_at": utc_isoformat(event.created_at),
             })
         if analysis.status in {"completed", "partial", "failed"}:
             yield _sse_event("analysis_done", {"status": analysis.status})
