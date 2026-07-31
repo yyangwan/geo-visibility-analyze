@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     device_gateway_token: str = ""
     device_gateway_ids: str = ""
     device_gateway_lease_seconds: int = 120
+    mobile_app_capture_enabled: bool = False
+    mobile_app_capture_platforms: str = "deepseek,doubao,hunyuan,qwen,kimi"
+    mobile_app_capture_gateway_id: str = ""
+    mobile_app_capture_device_serial: str = ""
+    mobile_app_capture_task_timeout_seconds: int = 420
+    mobile_app_capture_wait_timeout_seconds: int = 1200
+    mobile_app_capture_poll_interval_seconds: float = 2.0
+    mobile_app_capture_max_attempts: int = 3
+    mobile_app_capture_priority: int = 10
 
     # Timezone for scheduler (default: China Standard Time)
     tz: str = "Asia/Shanghai"

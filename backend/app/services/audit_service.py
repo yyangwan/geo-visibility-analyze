@@ -23,6 +23,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import ErrorCode, PlatformResponse
+from app.adapters.mobile_gateway import MobileGatewayAdapter, mobile_capture_enabled
 from app.adapters.registry import get_adapters
 from app.database import async_session
 from app.logging_config import get_logger
@@ -134,6 +135,38 @@ def _build_source_snapshot_hash(
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _build_persisted_citations(
+    extracted_sources: list,
+    structured_citations: list[dict] | None,
+) -> list[dict]:
+    """Keep the legacy citation shape plus unresolved mobile references."""
+    citations = [
+        {"domain": source.domain, "urls": source.urls, "title": source.title}
+        for source in extracted_sources
+    ]
+    for citation in structured_citations or []:
+        if citation.get("provider") != "mobile_gateway":
+            continue
+        if citation.get("url") or citation.get("domain"):
+            continue
+        title = str(citation.get("title") or "")
+        site_name = str(citation.get("site_name") or "")
+        if not title and not site_name:
+            continue
+        citations.append(
+            {
+                "domain": "",
+                "urls": [],
+                "title": title,
+                "site_name": site_name,
+                "index": citation.get("index"),
+                "url_resolution": citation.get("url_resolution", "unavailable"),
+                "status": citation.get("status", "collected"),
+            }
+        )
+    return citations
 
 
 async def _append_event(
@@ -491,8 +524,11 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     adapters = get_adapters(platforms)
 
     # Issue 2.1: Load platform configs and inject into adapters
-    for adapter in adapters:
+    for index, adapter in enumerate(adapters):
         config = await get_platform_config(db, adapter.platform_name)
+        if mobile_capture_enabled(adapter.platform_name, config):
+            adapter = MobileGatewayAdapter(adapter.platform_name)
+            adapters[index] = adapter
         adapter.set_platform_config(config)
         runtime_context = {
             "analysis_run_id": audit.analysis_run_id,
@@ -658,10 +694,10 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
             if resp.success and resp.response_text:
                 extracted = extract_sources(resp.response_text, api_citations=resp.citations)
 
-            citations_json = [
-                {"domain": s.domain, "urls": s.urls, "title": s.title}
-                for s in extracted
-            ]
+            citations_json = _build_persisted_citations(
+                extracted,
+                resp.citations,
+            )
 
             prr = await _upsert_platform_response_record(
                 db,

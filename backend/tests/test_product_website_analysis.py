@@ -419,6 +419,54 @@ async def test_run_product_website_citation_check_summarizes_platform_results(mo
 
 
 @pytest.mark.asyncio
+async def test_product_website_citation_check_uses_mobile_capture(monkeypatch):
+    created_platforms = []
+    queried_prompts = []
+    runtime_contexts = []
+
+    class ApiAdapter:
+        platform_name = "qwen"
+
+    class FakeMobileAdapter:
+        def __init__(self, platform_name):
+            self.platform_name = platform_name
+            created_platforms.append(platform_name)
+
+        def set_runtime_context(self, context):
+            self.context = context
+            runtime_contexts.append(context)
+
+        async def query(self, prompts):
+            queried_prompts.extend(prompts)
+            return [
+                PlatformResponse(
+                    platform=self.platform_name,
+                    prompt=prompts[0],
+                    response_text="移动端回答",
+                )
+            ]
+
+    monkeypatch.setattr(product_website_ai_citations.settings, "product_website_ai_citation_enabled", True)
+    monkeypatch.setattr(product_website_ai_citations.settings, "product_website_ai_citation_platforms", "qwen")
+    monkeypatch.setattr(product_website_ai_citations.settings, "product_website_ai_citation_prompt_limit", 1)
+    monkeypatch.setattr(product_website_ai_citations.settings, "mobile_app_capture_enabled", True)
+    monkeypatch.setattr(product_website_ai_citations.settings, "mobile_app_capture_platforms", "qwen")
+    monkeypatch.setattr(product_website_ai_citations, "MobileGatewayAdapter", FakeMobileAdapter)
+    monkeypatch.setattr(product_website_ai_citations, "get_adapters", lambda platforms: [ApiAdapter()])
+
+    result = await run_product_website_citation_check(
+        {"project": {"id": "project-1", "name": "Alpha"}},
+        "https://example.com/product",
+    )
+
+    assert created_platforms == ["qwen"]
+    assert queried_prompts
+    assert runtime_contexts[0]["project_id"] == "project-1"
+    assert runtime_contexts[0]["analysis_run_id"]
+    assert result.platforms[0]["platform"] == "qwen"
+
+
+@pytest.mark.asyncio
 async def test_create_product_website_analysis(client: AsyncClient, db_session):
     project_id = "proj-product-site"
 

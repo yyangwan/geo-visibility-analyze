@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.mobile_gateway import mobile_capture_enabled
 from app.adapters.registry import PLATFORM_LABELS, available_platforms
 from app.api.access import require_workspace_scope
 from app.api.auth import get_current_user
@@ -52,7 +53,7 @@ async def list_platforms(
         PlatformInfo(
             key=key,
             label=PLATFORM_LABELS.get(key, key),
-            configured=bool(api_key_map.get(key)),
+            configured=mobile_capture_enabled(key) or bool(api_key_map.get(key)),
         )
         for key in available_platforms()
     ]
