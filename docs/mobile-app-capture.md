@@ -24,18 +24,26 @@ the original platform API adapters. Internal LLM calls used for prompt
 generation, analysis, and suggestions are not affected by this switch.
 Product-website AI citation checks use the same mobile collection switch.
 
-## TODO: Yuanbao exact source URLs
+## Yuanbao exact source URLs
 
-Yuanbao currently exposes every reference's site name, title, and snippet but
-does not expose the hidden destination path through accessibility, Activity
-extras, logcat, or a debuggable WebView socket.
+Yuanbao source URLs are collected from the app's own source-detail workflow:
 
-- [ ] Prepare a dedicated rooted Android test device.
-- [ ] Add an authorized Frida probe for `WebView.loadUrl`,
-      `WebViewClient.shouldOverrideUrlLoading`, `Intent.setData`, and network
-      request construction.
-- [ ] Correlate captured URLs and redirect chains with the Appium reference
-      index.
-- [ ] Store `original_url`, `redirect_chain`, and `final_url`.
-- [ ] Keep inferred title-search matches explicitly labeled and separate from
-      observed URLs.
+1. Open the answer's source panel and enumerate every reference from Android's
+   native accessibility hierarchy.
+2. Open each reference and select the detail page's top-right menu.
+3. Focus the Huawei share sheet's `Copy Link` action with hardware-key
+   navigation and activate it. The share sheet blocks shell touch injection,
+   so the focused container is verified against its `Copy Link` descendant.
+4. Read and decode the copied URL through Appium Settings' clipboard receiver.
+5. Return to the source panel and continue until every reference is collected.
+
+Yuanbao uses a pure ADB path after launch because UiAutomator2 can deadlock on
+its Compose answer view. Native hierarchy dumps and binary `adb exec-out`
+transfers are retried to tolerate transient device idle and transport errors.
+If an installed Android app claims a source App Link, the gateway temporarily
+disables that package, reopens the reference through Yuanbao's web flow, and
+restores the package immediately afterward.
+
+Only observed HTTP(S) clipboard values are emitted with
+`url_resolution="exact"`; failed records retain their collection status and
+error message rather than receiving an inferred URL.
