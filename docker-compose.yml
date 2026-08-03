@@ -57,7 +57,7 @@ services:
       AISCOPE_PRODUCT_WEBSITE_AI_CITATION_PROMPT_LIMIT: ${AISCOPE_PRODUCT_WEBSITE_AI_CITATION_PROMPT_LIMIT:-2}
       # Auth
       AISCOPE_SECRET_KEY: ${AISCOPE_SECRET_KEY:?AISCOPE_SECRET_KEY must be set}
-      AISCOPE_GENILINK_JWKS_URL: ${AISCOPE_GENILINK_JWKS_URL:-http://host.docker.internal:3001/.well-known/jwks.json}
+      AISCOPE_GENILINK_JWKS_URL: ${AISCOPE_GENILINK_JWKS_URL:-https://genilink.cn/.well-known/jwks.json}
       AISCOPE_GENILINK_ISSUER: ${AISCOPE_GENILINK_ISSUER:-https://app.genilink.cn}
       AISCOPE_GENILINK_AUDIENCE: ${AISCOPE_GENILINK_AUDIENCE:-visibility.genilink.cn}
       # CORS (comma-separated origins, default: allow all)
