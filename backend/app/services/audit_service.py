@@ -69,6 +69,27 @@ class PlatformQueryOutcome:
     error: Exception | None = None
 
 
+async def _collect_platform_query_outcomes(adapters, runner) -> list[PlatformQueryOutcome]:
+    """Run API adapters concurrently while serializing one-device mobile work."""
+    mobile_adapters = [
+        adapter for adapter in adapters if isinstance(adapter, MobileGatewayAdapter)
+    ]
+    concurrent_adapters = [
+        adapter for adapter in adapters if not isinstance(adapter, MobileGatewayAdapter)
+    ]
+    concurrent_tasks = [
+        asyncio.create_task(runner(adapter)) for adapter in concurrent_adapters
+    ]
+
+    outcomes = []
+    for adapter in mobile_adapters:
+        outcomes.append(await runner(adapter))
+    outcomes.extend(
+        [await task for task in asyncio.as_completed(concurrent_tasks)]
+    )
+    return outcomes
+
+
 _WORKER_ID = f"local-{os.getpid()}"
 _LEASE_SECONDS = 15 * 60
 
@@ -626,11 +647,14 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
         publish(audit.id, PlatformEvent(type="platform_start", platform=adapter.platform_name))
     await db.commit()
 
-    tasks = [
-        asyncio.create_task(_run_platform_query(adapter.platform_name, adapter, prompt_texts))
-        for adapter in adapters
-    ]
-    outcomes = [await coro for coro in asyncio.as_completed(tasks)]
+    outcomes = await _collect_platform_query_outcomes(
+        adapters,
+        lambda adapter: _run_platform_query(
+            adapter.platform_name,
+            adapter,
+            prompt_texts,
+        ),
+    )
 
     response_records: dict[tuple[str, str], PlatformResponseRecord] = {}
     all_responses: list[tuple[str, PlatformResponse]] = []
@@ -639,16 +663,27 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     for outcome in outcomes:
         platform_name = outcome.platform_name
         all_responses.extend((platform_name, resp) for resp in outcome.responses)
-        if outcome.error:
+        failed_responses = [resp for resp in outcome.responses if not resp.success]
+        if outcome.error or failed_responses:
             platform_error_count += 1
+            error_message = str(outcome.error) if outcome.error else (
+                failed_responses[0].error_message or "Platform query failed"
+            )
             await _append_event(
                 db,
                 audit,
                 "platform_error",
-                {"platform": platform_name, "error": str(outcome.error)},
+                {"platform": platform_name, "error": error_message},
                 stage_name=query_stage.stage_name,
             )
-            publish(audit.id, PlatformEvent(type="platform_error", platform=platform_name, error=str(outcome.error)))
+            publish(
+                audit.id,
+                PlatformEvent(
+                    type="platform_error",
+                    platform=platform_name,
+                    error=error_message,
+                ),
+            )
         else:
             await _append_event(
                 db,
@@ -746,6 +781,10 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
 
     await db.commit()
 
+    source_citation_count = int((await db.execute(
+        select(func.count(SourceCitation.id)).where(SourceCitation.audit_id == audit.id)
+    )).scalar_one())
+
     await _finish_stage(
         db,
         audit,
@@ -753,7 +792,7 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
         RunStatus.COMPLETED,
         output_snapshot={
             "response_record_count": len(response_records),
-            "source_citation_count": len(response_records),
+            "source_citation_count": source_citation_count,
         },
     )
     await db.commit()
