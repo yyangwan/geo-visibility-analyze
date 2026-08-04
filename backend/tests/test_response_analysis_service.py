@@ -74,6 +74,14 @@ MOCK_LLM_RESPONSE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def configured_analysis_llm():
+    with patch("app.services.response_analysis_service.settings") as mock_settings:
+        mock_settings.get_llm_config.return_value = ("key", "url", "model")
+        mock_settings.analysis_timeout_seconds = 60
+        yield mock_settings
+
+
 @pytest.mark.asyncio
 async def test_call_llm_for_analysis_success(db_session: AsyncSession):
     mock_resp = MagicMock()
