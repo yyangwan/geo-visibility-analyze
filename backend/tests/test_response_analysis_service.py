@@ -262,6 +262,11 @@ async def test_analyze_single_filters_synthetic_cited_sources(db_session: AsyncS
 @pytest.mark.asyncio
 async def test_analyze_single_llm_failure(db_session: AsyncSession):
     _, prrs, brands = await _seed_audit(db_session, 1)
+    prrs[0].citations = [{
+        "domain": "https://www.example.com/path",
+        "title": "官方选购指南",
+        "urls": ["https://www.example.com/guide"],
+    }]
     ra = ResponseAnalysis(response_record_id=prrs[0].id, status="pending")
     db_session.add(ra)
     await db_session.commit()
@@ -279,7 +284,14 @@ async def test_analyze_single_llm_failure(db_session: AsyncSession):
             _brand_names(brands, competitor=True),
         )
 
-    assert ra.status == "failed"
+    assert ra.status == "partial"
+    assert ra.analysis_model == "deterministic-source-fallback"
+    assert ra.cited_sources == [{
+        "domain": "example.com",
+        "urls": ["https://www.example.com/guide"],
+        "title": "官方选购指南",
+        "authority_score": 3.3,
+    }]
 
 
 @pytest.mark.asyncio

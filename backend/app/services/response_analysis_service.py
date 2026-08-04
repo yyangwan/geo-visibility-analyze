@@ -23,7 +23,7 @@ from app.models.models import (
     ResponseAnalysis,
 )
 from app.services.audit_service import BrandData
-from app.services.source_quality import clean_cited_sources
+from app.services.source_quality import clean_cited_sources, score_source_authority
 
 logger = get_logger("analysis")
 
@@ -50,6 +50,32 @@ AI平台回答内容：
 
 MAX_RESPONSE_CHARS = 4000
 MAX_CONCURRENT_ANALYSIS = 3
+
+
+def _build_citation_fallback(citations: list[dict] | None) -> list[dict]:
+    """Preserve captured source data when semantic LLM analysis is unavailable."""
+    sources: list[dict] = []
+    for citation in citations or []:
+        if not isinstance(citation, dict):
+            continue
+        domain = str(citation.get("domain", "")).strip()
+        urls = [str(url) for url in citation.get("urls", []) if url]
+        title = str(citation.get("title", "")).strip() or None
+        cleaned = clean_cited_sources([{"domain": domain}])
+        if not cleaned:
+            continue
+        normalized_domain = cleaned[0]["domain"]
+        sources.append({
+            "domain": normalized_domain,
+            "urls": urls,
+            "title": title,
+            "authority_score": score_source_authority(
+                normalized_domain,
+                urls=urls,
+                title=title,
+            ),
+        })
+    return sources
 
 
 async def run_analysis_for_audit(audit_id: int) -> None:
@@ -213,7 +239,11 @@ async def _analyze_single(
         )
 
         if result is None:
-            ra.status = "failed"
+            # Source capture is primary data and must remain queryable even
+            # when the optional semantic-analysis API is not configured.
+            ra.cited_sources = _build_citation_fallback(prr.citations)
+            ra.analysis_model = "deterministic-source-fallback"
+            ra.status = "partial"
             await db.commit()
             return
 
