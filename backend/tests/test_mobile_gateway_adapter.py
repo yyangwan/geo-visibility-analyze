@@ -50,6 +50,10 @@ async def test_mobile_result_normalizes_to_platform_response(monkeypatch):
             "answer_urls": ["https://www.deepseek.com/"],
             "reference_count": 2,
             "source_count": 2,
+            "source_success_count": 1,
+            "source_failure_count": 1,
+            "source_completeness": 0.5,
+            "capture_status": "partial",
             "duration_ms": 12345,
             "source_collection_duration_ms": 900,
             "sources": [
@@ -100,6 +104,10 @@ async def test_mobile_result_normalizes_to_platform_response(monkeypatch):
     assert response.citations[1]["url_resolution"] == "unavailable"
     assert response.raw_response["platform"] == "yuanbao"
     assert response.search_metadata["reference_count"] == 2
+    assert response.search_metadata["source_success_count"] == 1
+    assert response.search_metadata["source_failure_count"] == 1
+    assert response.search_metadata["source_completeness"] == 0.5
+    assert response.search_metadata["capture_status"] == "partial"
     assert response.request_params["platform"] == "yuanbao"
 
 
@@ -171,3 +179,24 @@ def test_unresolved_mobile_citations_are_preserved_without_fake_domain():
             "status": "collected",
         },
     ]
+
+
+def test_capture_quality_counts_missing_reference_records_as_failures():
+    quality = MobileGatewayAdapter._capture_quality(
+        {
+            "reference_count": 3,
+            "sources": [
+                {
+                    "status": "collected",
+                    "url": "https://example.com/source",
+                }
+            ],
+        }
+    )
+
+    assert quality == {
+        "source_success_count": 1,
+        "source_failure_count": 2,
+        "source_completeness": pytest.approx(1 / 3),
+        "capture_status": "partial",
+    }

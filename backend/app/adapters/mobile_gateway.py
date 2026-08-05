@@ -114,6 +114,7 @@ class MobileGatewayAdapter(PlatformAdapter):
             )
 
         citations = self._normalize_citations(result)
+        capture_quality = self._capture_quality(result)
         app_version = str(result.get("app_version") or "")
         return PlatformResponse(
             platform=self.platform_name,
@@ -138,6 +139,7 @@ class MobileGatewayAdapter(PlatformAdapter):
                 "device_serial": result.get("device_serial"),
                 "reference_count": result.get("reference_count", 0),
                 "source_count": result.get("source_count", 0),
+                **capture_quality,
                 "sources": result.get("sources", []),
                 "answer_urls": result.get("answer_urls", []),
                 "source_collection_duration_ms": result.get(
@@ -248,6 +250,46 @@ class MobileGatewayAdapter(PlatformAdapter):
                 }
             )
         return citations
+
+    @staticmethod
+    def _capture_quality(result: dict) -> dict:
+        sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
+        reference_count = max(int(result.get("reference_count") or 0), 0)
+        success_count = result.get("source_success_count")
+        if success_count is None:
+            success_count = sum(
+                1
+                for source in sources
+                if source.get("status", "collected") == "collected"
+                and (source.get("url") or source.get("domain"))
+            )
+        success_count = max(int(success_count), 0)
+        failure_count = max(
+            int(
+                result.get("source_failure_count")
+                or max(len(sources), reference_count) - success_count
+            ),
+            0,
+        )
+        completeness = result.get("source_completeness")
+        if completeness is None:
+            completeness = success_count / reference_count if reference_count else 1.0
+        completeness = min(max(float(completeness), 0.0), 1.0)
+        capture_status = result.get("capture_status")
+        if capture_status not in {"complete", "partial", "answer_only"}:
+            capture_status = (
+                "complete"
+                if completeness >= 1.0
+                else "partial"
+                if success_count
+                else "answer_only"
+            )
+        return {
+            "source_success_count": success_count,
+            "source_failure_count": failure_count,
+            "source_completeness": completeness,
+            "capture_status": capture_status,
+        }
 
     def _error_response(
         self,
