@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid4
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from app.adapters.base import PlatformResponse
-from app.adapters.mobile_gateway import MobileGatewayAdapter, mobile_capture_enabled
 from app.adapters.registry import get_adapters
 from app.config import settings
 
@@ -55,9 +54,6 @@ async def run_product_website_citation_check(input_snapshot: dict, target_url: s
     platforms = configured_product_website_citation_platforms()
     prompts = build_product_website_citation_prompts(input_snapshot, target_url)
     adapters = get_adapters(platforms)
-    for index, adapter in enumerate(adapters):
-        if mobile_capture_enabled(adapter.platform_name):
-            adapters[index] = MobileGatewayAdapter(adapter.platform_name)
     platform_results: list[dict] = []
 
     for adapter in adapters:

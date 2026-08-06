@@ -4,27 +4,26 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 
+from app.adapters.base import PlatformResponse
 from app.api.auth import get_current_user
 from app.api.product_website import _product_website_report_html
 from app.main import app
 from app.models.models import ProductWebsiteAnalysis
-from app.adapters.base import PlatformResponse
-from app.services import product_website_crawler
-from app.services import product_website_ai_citations
+from app.services import product_website_ai_citations, product_website_crawler
 from app.services.product_website_ai_citations import (
     build_product_website_citation_prompts,
     configured_product_website_citation_platforms,
     run_product_website_citation_check,
 )
-from app.services.product_website_crawler import (
-    FirecrawlProductWebsiteCrawler,
-    NativeProductWebsiteCrawler,
-    get_product_website_crawler,
-)
 from app.services.product_website_analysis_service import (
     _parse_robots_access,
     _validate_llms_text,
     build_result_snapshot,
+)
+from app.services.product_website_crawler import (
+    FirecrawlProductWebsiteCrawler,
+    NativeProductWebsiteCrawler,
+    get_product_website_crawler,
 )
 
 
@@ -419,18 +418,12 @@ async def test_run_product_website_citation_check_summarizes_platform_results(mo
 
 
 @pytest.mark.asyncio
-async def test_product_website_citation_check_uses_mobile_capture(monkeypatch):
-    created_platforms = []
+async def test_product_website_citation_check_keeps_api_adapter_when_mobile_capture_enabled(monkeypatch):
     queried_prompts = []
     runtime_contexts = []
 
     class ApiAdapter:
         platform_name = "qwen"
-
-    class FakeMobileAdapter:
-        def __init__(self, platform_name):
-            self.platform_name = platform_name
-            created_platforms.append(platform_name)
 
         def set_runtime_context(self, context):
             self.context = context
@@ -442,7 +435,7 @@ async def test_product_website_citation_check_uses_mobile_capture(monkeypatch):
                 PlatformResponse(
                     platform=self.platform_name,
                     prompt=prompts[0],
-                    response_text="移动端回答",
+                    response_text="API 回答",
                 )
             ]
 
@@ -451,7 +444,6 @@ async def test_product_website_citation_check_uses_mobile_capture(monkeypatch):
     monkeypatch.setattr(product_website_ai_citations.settings, "product_website_ai_citation_prompt_limit", 1)
     monkeypatch.setattr(product_website_ai_citations.settings, "mobile_app_capture_enabled", True)
     monkeypatch.setattr(product_website_ai_citations.settings, "mobile_app_capture_platforms", "qwen")
-    monkeypatch.setattr(product_website_ai_citations, "MobileGatewayAdapter", FakeMobileAdapter)
     monkeypatch.setattr(product_website_ai_citations, "get_adapters", lambda platforms: [ApiAdapter()])
 
     result = await run_product_website_citation_check(
@@ -459,7 +451,6 @@ async def test_product_website_citation_check_uses_mobile_capture(monkeypatch):
         "https://example.com/product",
     )
 
-    assert created_platforms == ["qwen"]
     assert queried_prompts
     assert runtime_contexts[0]["project_id"] == "project-1"
     assert runtime_contexts[0]["analysis_run_id"]
