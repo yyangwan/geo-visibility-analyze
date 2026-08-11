@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -541,3 +541,43 @@ async def test_product_website_trends(client: AsyncClient, db_session):
     assert data["projectId"] == project_id
     assert data["summary"]["currentScore"] == 78.0
     assert data["points"][0]["dimensions"] == {"technical": 80}
+
+
+@pytest.mark.asyncio
+async def test_product_website_trends_filters_range_and_keeps_latest_run_per_day(client: AsyncClient, db_session):
+    project_id = "proj-product-trends-range"
+
+    async def override_current_user():
+        return {"scope": "project", "pid": project_id}
+
+    now = datetime.now(timezone.utc)
+    for score, created_at in [
+        (40.0, now - timedelta(days=40)),
+        (60.0, now - timedelta(hours=2)),
+        (70.0, now - timedelta(hours=1)),
+    ]:
+        db_session.add(ProductWebsiteAnalysis(
+            workspace_id="workspace-1",
+            project_id=project_id,
+            target_url="https://example.com",
+            status="completed",
+            stage="completed",
+            score_overall=score,
+            score_grade="B",
+            result_snapshot={"score": {"dimensions": {"technical": score}}},
+            created_at=created_at,
+            completed_at=created_at,
+            input_snapshot={},
+        ))
+    await db_session.commit()
+
+    app.dependency_overrides[get_current_user] = override_current_user
+    try:
+        resp = await client.get(f"/api/product-website/projects/{project_id}/trends?range=30d")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [point["overall"] for point in data["points"]] == [70.0]
+    assert data["summary"] == {"currentScore": 70.0, "delta": None}

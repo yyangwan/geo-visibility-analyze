@@ -3,9 +3,10 @@
 import asyncio
 import io
 import json
+from datetime import datetime, timedelta, timezone
 from html import escape
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -697,13 +698,23 @@ async def product_website_trends(
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(current_user, project_id)
+    range_days = {"7d": 7, "30d": 30, "90d": 90}.get(range, 30)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=range_days)
     result = await db.execute(
         select(ProductWebsiteAnalysis)
-        .where(ProductWebsiteAnalysis.project_id == project_id)
+        .where(
+            ProductWebsiteAnalysis.project_id == project_id,
+            ProductWebsiteAnalysis.created_at >= cutoff,
+        )
         .order_by(ProductWebsiteAnalysis.created_at.desc())
         .limit(90)
     )
     analyses = list(reversed(result.scalars().all()))
+    latest_by_day = {
+        (row.completed_at or row.created_at).date(): row
+        for row in analyses
+    }
+    analyses = list(latest_by_day.values())
     points = [
         {
             "analysisId": row.id,
