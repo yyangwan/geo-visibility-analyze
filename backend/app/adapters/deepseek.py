@@ -20,8 +20,8 @@ class DeepSeekAdapter(OpenAICompatAdapter):
 
     def __init__(self):
         self.api_key = settings.deepseek_api_key
-        self.base_url = "https://api.deepseek.com"
-        self.model = self.api_model
+        self.base_url = settings.deepseek_base_url.rstrip("/")
+        self.model = settings.deepseek_model
         super().__init__()
         self._web_adapter = DeepSeekWebAdapter()
         self._web_adapter.set_platform_config(self.get_platform_config())

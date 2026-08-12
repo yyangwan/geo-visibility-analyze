@@ -127,12 +127,13 @@ async def run_analysis_for_audit(audit_id: int) -> None:
                 ))
         await db.commit()
 
-        # Load pending/failed analyses
+        # Partial records contain citation fallback data only. Include them so
+        # audits can be backfilled after the official analysis API is restored.
         result = await db.execute(
             select(ResponseAnalysis)
             .join(PlatformResponseRecord, ResponseAnalysis.response_record_id == PlatformResponseRecord.id)
             .where(PlatformResponseRecord.audit_id == audit_id)
-            .where(ResponseAnalysis.status.in_(["pending", "failed"]))
+            .where(ResponseAnalysis.status.in_(["pending", "failed", "partial"]))
         )
         pending_analyses = result.scalars().all()
 
@@ -158,13 +159,13 @@ async def run_analysis_for_audit(audit_id: int) -> None:
 
 
 async def retry_failed_analyses(audit_id: int) -> int:
-    """Retry all failed analyses for an audit. Returns count of retried records."""
+    """Retry failed or partial analyses. Returns count of retried records."""
     async with async_session() as db:
         result = await db.execute(
             select(ResponseAnalysis)
             .join(PlatformResponseRecord, ResponseAnalysis.response_record_id == PlatformResponseRecord.id)
             .where(PlatformResponseRecord.audit_id == audit_id)
-            .where(ResponseAnalysis.status == "failed")
+            .where(ResponseAnalysis.status.in_(["failed", "partial"]))
         )
         failed = result.scalars().all()
 
@@ -247,7 +248,7 @@ async def _analyze_single(
             await db.commit()
             return
 
-        api_key, _, model = settings.get_llm_config()
+        _, _, model = settings.get_analysis_llm_config()
         ra.brand_sentiment = result.get("brand_sentiment")
         ra.brand_attributes = result.get("brand_attributes", [])
         ra.topics_covered = result.get("topics_covered", [])
@@ -277,7 +278,7 @@ async def _call_llm_for_analysis(
     timeout: int,
 ) -> dict | None:
     """Call LLM and parse structured JSON response for analysis."""
-    api_key, base_url, model = settings.get_llm_config()
+    api_key, base_url, model = settings.get_analysis_llm_config()
     if not api_key:
         logger.warning("analysis_no_api_key")
         return None
@@ -285,7 +286,7 @@ async def _call_llm_for_analysis(
     try:
         async with httpx.AsyncClient(timeout=timeout, proxy=None) as client:
             resp = await client.post(
-                f"{base_url}/chat/completions",
+                f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
                     "model": model,
@@ -293,6 +294,7 @@ async def _call_llm_for_analysis(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
+                    "response_format": {"type": "json_object"},
                     "temperature": 0.3,
                 },
             )

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings
 from app.models.models import (
     Audit,
     PlatformResponseRecord,
@@ -74,10 +75,42 @@ MOCK_LLM_RESPONSE = {
 }
 
 
+def test_analysis_llm_config_defaults_to_official_deepseek():
+    configured = Settings(
+        _env_file=None,
+        secret_key="test-secret",
+        deepseek_api_key="official-key",
+    )
+
+    assert configured.get_analysis_llm_config() == (
+        "official-key",
+        "https://api.deepseek.com",
+        "deepseek-v4-flash",
+    )
+
+    overridden = Settings(
+        _env_file=None,
+        secret_key="test-secret",
+        deepseek_api_key="official-key",
+        analysis_llm_api_key="dedicated-analysis-key",
+        analysis_llm_base_url="https://analysis.example/v1",
+        analysis_llm_model="analysis-model",
+    )
+    assert overridden.get_analysis_llm_config() == (
+        "dedicated-analysis-key",
+        "https://analysis.example/v1",
+        "analysis-model",
+    )
+
+
 @pytest.fixture(autouse=True)
 def configured_analysis_llm():
     with patch("app.services.response_analysis_service.settings") as mock_settings:
-        mock_settings.get_llm_config.return_value = ("key", "url", "model")
+        mock_settings.get_analysis_llm_config.return_value = (
+            "key",
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+        )
         mock_settings.analysis_timeout_seconds = 60
         yield mock_settings
 
@@ -101,6 +134,10 @@ async def test_call_llm_for_analysis_success(db_session: AsyncSession):
     assert result is not None
     assert result["brand_sentiment"] == "positive"
     assert len(result["topics_covered"]) == 2
+    request = mock_client.post.await_args
+    assert request.args[0] == "https://api.deepseek.com/chat/completions"
+    assert request.kwargs["json"]["model"] == "deepseek-v4-flash"
+    assert request.kwargs["json"]["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.asyncio
@@ -178,7 +215,11 @@ async def test_response_text_truncation(db_session: AsyncSession):
 
     with patch("app.services.response_analysis_service.httpx.AsyncClient", return_value=mock_client):
         with patch("app.services.response_analysis_service.settings") as mock_settings:
-            mock_settings.get_llm_config.return_value = ("key", "url", "model")
+            mock_settings.get_analysis_llm_config.return_value = (
+                "key",
+                "https://api.deepseek.com",
+                "deepseek-v4-flash",
+            )
             mock_settings.analysis_timeout_seconds = 60
 
             _, prrs, brands = await _seed_audit(db_session, 1)

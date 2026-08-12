@@ -11,12 +11,11 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "mysql+aiomysql://aiscope:aiscope@localhost:3306/aiscope"
 
-    # DeepSeek — hosted on DashScope (Bailian) for web search support
-    # Use DashScope API key, not DeepSeek official key
-    # Models: deepseek-v3, deepseek-v3.1, deepseek-r1, deepseek-v4-pro
+    # DeepSeek official API. AI visibility audits prefer mobile-app capture;
+    # this API path is the non-search fallback and powers internal LLM tasks.
     deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    deepseek_model: str = "deepseek-v3"
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
     deepseek_web_auth_token: str = ""
     deepseek_web_cookie: str = ""
     deepseek_web_user_agent: str = ""
@@ -62,7 +61,11 @@ class Settings(BaseSettings):
     query_timeout_seconds: int = 60
     max_concurrent_per_platform: int = 2
 
-    # Analysis settings
+    # Optional semantic-analysis overrides. Empty values reuse the official
+    # DeepSeek configuration above; none of these paths performs web search.
+    analysis_llm_api_key: str = ""
+    analysis_llm_base_url: str = ""
+    analysis_llm_model: str = ""
     analysis_timeout_seconds: int = 120
 
     # Product website crawler settings
@@ -132,6 +135,14 @@ class Settings(BaseSettings):
             self.llm_api_key or self.deepseek_api_key,
             self.llm_base_url or self.deepseek_base_url,
             self.llm_model or self.deepseek_model,
+        )
+
+    def get_analysis_llm_config(self) -> tuple[str, str, str]:
+        """Return the isolated, non-search LLM config for response analysis."""
+        return (
+            self.analysis_llm_api_key or self.deepseek_api_key,
+            self.analysis_llm_base_url or self.deepseek_base_url,
+            self.analysis_llm_model or self.deepseek_model,
         )
 
 

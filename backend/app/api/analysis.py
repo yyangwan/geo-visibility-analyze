@@ -100,11 +100,11 @@ async def retry_analysis(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retry all failed analyses for an audit."""
+    """Retry failed or partial analyses for an audit."""
     await get_audit_for_project(db, current_user, audit_id)
 
     count = await retry_failed_analyses(audit_id)
-    return {"message": f"Retrying {count} failed analyses", "count": count}
+    return {"message": f"Retrying {count} incomplete analyses", "count": count}
 
 
 @router.get("/projects/{project_id}/content-intelligence", response_model=ContentIntelligenceOut)

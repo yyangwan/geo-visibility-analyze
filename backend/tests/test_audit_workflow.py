@@ -36,8 +36,8 @@ class _FakeAdapter:
 class _FakeAnalysisSettings:
     analysis_timeout_seconds = 60
 
-    def get_llm_config(self):
-        return ("api-key", "https://example.com", "analysis-model")
+    def get_analysis_llm_config(self):
+        return ("api-key", "https://api.deepseek.com", "deepseek-v4-flash")
 
 
 MOCK_LLM_RESPONSE = {
@@ -315,8 +315,23 @@ async def test_execute_audit_keeps_other_platforms_running_and_analysis_uses_prr
 
     assert len(analyses) == 1
     assert analyses[0].status == "completed"
-    assert analyses[0].analysis_model == "analysis-model"
+    assert analyses[0].analysis_model == "deepseek-v4-flash"
+
+    # A citation-only fallback must be eligible for backfill after the
+    # dedicated semantic-analysis API is configured or restored.
+    analyses[0].status = "partial"
+    analyses[0].brand_sentiment = None
+    analyses[0].topics_covered = []
+    analyses[0].answer_structure = None
+    await db_session.commit()
+
+    await response_analysis_service.run_analysis_for_audit(audit.id)
+    await db_session.refresh(analyses[0])
+
+    assert analyses[0].status == "completed"
     assert analyses[0].brand_sentiment == "positive"
+    assert analyses[0].topics_covered == ["产品特点"]
+    assert analyses[0].answer_structure == "list"
 
 
 @pytest.mark.asyncio
