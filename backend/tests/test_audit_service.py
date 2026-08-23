@@ -327,3 +327,34 @@ async def test_run_audit_rolls_back_before_marking_failed(monkeypatch):
     assert audit.status == QueryStatus.FAILED
     assert audit.error_message == "boom"
     assert audit.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_run_audit_triggers_response_analysis_after_completion(monkeypatch):
+    audit = Audit(project_id="project-1", status=QueryStatus.RUNNING)
+    audit.id = 43
+
+    db = MagicMock()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _execute_successfully(_db, current_audit):
+        current_audit.status = QueryStatus.COMPLETED
+
+    analyze = AsyncMock(return_value=None)
+    monkeypatch.setattr(audit_service, "async_session", lambda: _SessionCtx())
+    monkeypatch.setattr(audit_service, "claim_audit", AsyncMock(return_value=audit))
+    monkeypatch.setattr(audit_service, "_execute_audit", _execute_successfully)
+    monkeypatch.setattr(
+        "app.services.response_analysis_service.run_analysis_for_audit",
+        analyze,
+    )
+
+    await audit_service.run_audit(audit.id)
+
+    analyze.assert_awaited_once_with(audit.id)

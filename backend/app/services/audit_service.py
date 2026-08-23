@@ -488,6 +488,7 @@ async def _start_platform_run(
 
 async def run_audit(audit_id: int) -> None:
     """Execute an audit by ID. Designed to be run as a background task."""
+    should_analyze = False
     async with async_session() as db:
         audit = await claim_audit(db, audit_id)
         if not audit:
@@ -501,6 +502,23 @@ async def run_audit(audit_id: int) -> None:
             logger.exception("audit_failed", audit_id=audit_id, error=str(e))
             await _mark_audit_failed(db, audit_id, audit, str(e))
             publish(audit_id, PlatformEvent(type="audit_failed", error=str(e)))
+            return
+
+        should_analyze = audit.status in (QueryStatus.COMPLETED, QueryStatus.PARTIAL)
+
+    if not should_analyze:
+        return
+
+    # Keep required post-audit analysis on the server lifecycle. Import here to
+    # avoid the response-analysis service's BrandData import creating a cycle.
+    try:
+        from app.services.response_analysis_service import run_analysis_for_audit
+
+        await run_analysis_for_audit(audit_id)
+    except Exception as e:
+        # The audit itself is already complete and must remain queryable even if
+        # the optional semantic-analysis provider is temporarily unavailable.
+        logger.exception("audit_analysis_failed", audit_id=audit_id, error=str(e))
 
 
 async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
