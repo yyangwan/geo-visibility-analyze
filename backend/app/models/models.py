@@ -424,11 +424,14 @@ class ProductWebsiteAnalysis(Base):
         Index("ix_pwa_project_id", "project_id"),
         Index("ix_pwa_workspace_id", "workspace_id"),
         Index("ix_pwa_project_created", "project_id", "created_at"),
+        Index("ix_pwa_project_idempotency", "project_id", "idempotency_key", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(50), nullable=False)
     project_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_url: Mapped[str] = mapped_column(Text, nullable=False)
     final_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_domain: Mapped[str | None] = mapped_column(String(200), nullable=True)

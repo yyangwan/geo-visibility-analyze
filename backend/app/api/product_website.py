@@ -1,14 +1,16 @@
 """Product website visibility analysis API."""
 
 import asyncio
+import hashlib
 import io
 import json
 from datetime import datetime, timedelta, timezone
 from html import escape
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.access import get_product_website_analysis_for_project, require_project_scope
@@ -24,6 +26,26 @@ from app.services.product_website_analysis_service import run_product_website_an
 from app.utils.timezone import utc_isoformat
 
 router = APIRouter()
+
+
+def _request_fingerprint(data: ProductWebsiteAnalyzeRequest) -> str:
+    canonical = json.dumps(
+        data.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _created_response(analysis: ProductWebsiteAnalysis, *, replayed: bool) -> ProductWebsiteAnalyzeCreated:
+    return ProductWebsiteAnalyzeCreated(
+        id=analysis.id,
+        analysisId=analysis.id,
+        status=analysis.status,
+        stage=analysis.stage,
+        replayed=replayed,
+    )
 
 
 def _sse_event(event_type: str, data: dict) -> str:
@@ -661,13 +683,37 @@ def _product_website_report_html(analysis: ProductWebsiteAnalysis) -> str:
 @router.post("/analyze", response_model=ProductWebsiteAnalyzeCreated)
 async def create_product_website_analysis(
     data: ProductWebsiteAnalyzeRequest,
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=16,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(current_user, data.project_id)
+    fingerprint = _request_fingerprint(data)
+    existing = await db.scalar(
+        select(ProductWebsiteAnalysis).where(
+            ProductWebsiteAnalysis.project_id == data.project_id,
+            ProductWebsiteAnalysis.idempotency_key == idempotency_key,
+        )
+    )
+    if existing:
+        if existing.request_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Idempotency key already used with a different request",
+            )
+        return _created_response(existing, replayed=True)
+
     analysis = ProductWebsiteAnalysis(
         workspace_id=data.workspace_id,
         project_id=data.project_id,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
         target_url=data.target_url,
         status="queued",
         stage="queued",
@@ -678,16 +724,55 @@ async def create_product_website_analysis(
         },
     )
     db.add(analysis)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await db.scalar(
+            select(ProductWebsiteAnalysis).where(
+                ProductWebsiteAnalysis.project_id == data.project_id,
+                ProductWebsiteAnalysis.idempotency_key == idempotency_key,
+            )
+        )
+        if not existing:
+            raise
+        if existing.request_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Idempotency key already used with a different request",
+            )
+        return _created_response(existing, replayed=True)
     await db.refresh(analysis)
 
     asyncio.create_task(run_product_website_analysis(analysis.id))
-    return ProductWebsiteAnalyzeCreated(
-        id=analysis.id,
-        analysisId=analysis.id,
-        status=analysis.status,
-        stage=analysis.stage,
+    return _created_response(analysis, replayed=False)
+
+
+@router.get("/requests/lookup", response_model=ProductWebsiteAnalyzeCreated)
+async def lookup_product_website_analysis_request(
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=16,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project_id = current_user.get("pid")
+    if not isinstance(project_id, str):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Project scope required")
+    require_project_scope(current_user, project_id)
+    analysis = await db.scalar(
+        select(ProductWebsiteAnalysis).where(
+            ProductWebsiteAnalysis.project_id == project_id,
+            ProductWebsiteAnalysis.idempotency_key == idempotency_key,
+        )
     )
+    if not analysis:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis request not found")
+    return _created_response(analysis, replayed=True)
 
 
 @router.get("/projects/{project_id}/trends")
