@@ -473,6 +473,7 @@ async def test_create_product_website_analysis(client: AsyncClient, db_session):
         ):
             resp = await client.post(
                 "/api/product-website/analyze",
+                headers={"Idempotency-Key": "product-analysis-request-1"},
                 json={
                     "project_id": project_id,
                     "workspace_id": "workspace-1",
@@ -507,6 +508,89 @@ async def test_create_product_website_analysis(client: AsyncClient, db_session):
         "enable_ai_citation": True,
         "crawler_provider": "firecrawl",
     }
+
+
+@pytest.mark.asyncio
+async def test_product_website_analysis_request_is_idempotent_and_queryable(client: AsyncClient, db_session):
+    project_id = "proj-product-idempotent"
+    request_key = "product-analysis-idempotency-key"
+    payload = {
+        "project_id": project_id,
+        "workspace_id": "workspace-1",
+        "target_url": "https://example.com/product",
+        "project": {"name": "Alpha"},
+    }
+
+    async def override_current_user():
+        return {"scope": "project", "pid": project_id}
+
+    app.dependency_overrides[get_current_user] = override_current_user
+    try:
+        with patch(
+            "app.api.product_website.run_product_website_analysis",
+            new=AsyncMock(return_value=None),
+        ) as run_analysis:
+            first = await client.post(
+                "/api/product-website/analyze",
+                headers={"Idempotency-Key": request_key},
+                json=payload,
+            )
+            replay = await client.post(
+                "/api/product-website/analyze",
+                headers={"Idempotency-Key": request_key},
+                json=payload,
+            )
+            lookup = await client.get(
+                "/api/product-website/requests/lookup",
+                headers={"Idempotency-Key": request_key},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert lookup.status_code == 200
+    assert first.json()["replayed"] is False
+    assert replay.json()["replayed"] is True
+    assert lookup.json()["replayed"] is True
+    assert first.json()["analysisId"] == replay.json()["analysisId"] == lookup.json()["analysisId"]
+    run_analysis.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_product_website_analysis_rejects_idempotency_key_reuse(client: AsyncClient):
+    project_id = "proj-product-conflict"
+    request_key = "product-analysis-conflict-key"
+    payload = {
+        "project_id": project_id,
+        "workspace_id": "workspace-1",
+        "target_url": "https://example.com/product",
+    }
+
+    async def override_current_user():
+        return {"scope": "project", "pid": project_id}
+
+    app.dependency_overrides[get_current_user] = override_current_user
+    try:
+        with patch(
+            "app.api.product_website.run_product_website_analysis",
+            new=AsyncMock(return_value=None),
+        ):
+            first = await client.post(
+                "/api/product-website/analyze",
+                headers={"Idempotency-Key": request_key},
+                json=payload,
+            )
+            conflict = await client.post(
+                "/api/product-website/analyze",
+                headers={"Idempotency-Key": request_key},
+                json={**payload, "target_url": "https://different.example.com"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert first.status_code == 200
+    assert conflict.status_code == 409
 
 
 @pytest.mark.asyncio

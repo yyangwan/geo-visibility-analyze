@@ -176,7 +176,11 @@ async def health():
     try:
         async with async_session() as db:
             await db.execute(text("SELECT 1"))
-        return {"status": "ok", "db": "connected"}
+        return {
+            "status": "ok",
+            "db": "connected",
+            "capabilities": ["product_website_idempotency_v1"],
+        }
     except Exception:
         return JSONResponse(
             {"status": "degraded", "db": "disconnected"},
