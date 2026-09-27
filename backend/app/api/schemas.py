@@ -309,6 +309,7 @@ class ProductWebsiteAnalyzeCreated(BaseModel):
     analysisId: int
     status: str
     stage: str
+    replayed: bool = False
 
 
 class ProductWebsiteAnalysisOut(BaseModel):
