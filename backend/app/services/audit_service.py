@@ -18,8 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, text
-from sqlalchemy import update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import ErrorCode, PlatformResponse
@@ -70,24 +69,9 @@ class PlatformQueryOutcome:
 
 
 async def _collect_platform_query_outcomes(adapters, runner) -> list[PlatformQueryOutcome]:
-    """Run API adapters concurrently while serializing one-device mobile work."""
-    mobile_adapters = [
-        adapter for adapter in adapters if isinstance(adapter, MobileGatewayAdapter)
-    ]
-    concurrent_adapters = [
-        adapter for adapter in adapters if not isinstance(adapter, MobileGatewayAdapter)
-    ]
-    concurrent_tasks = [
-        asyncio.create_task(runner(adapter)) for adapter in concurrent_adapters
-    ]
-
-    outcomes = []
-    for adapter in mobile_adapters:
-        outcomes.append(await runner(adapter))
-    outcomes.extend(
-        [await task for task in asyncio.as_completed(concurrent_tasks)]
-    )
-    return outcomes
+    """Run platform collection concurrently; gateways enforce device capacity."""
+    tasks = [asyncio.create_task(runner(adapter)) for adapter in adapters]
+    return [await task for task in asyncio.as_completed(tasks)]
 
 
 _WORKER_ID = f"local-{os.getpid()}"

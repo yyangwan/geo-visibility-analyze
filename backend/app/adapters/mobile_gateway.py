@@ -13,7 +13,6 @@ from app.database import async_session
 from app.models.device_gateway import DeviceGateway, DeviceTask
 from app.services.device_gateway_service import create_task
 
-
 _GATEWAY_PLATFORM_NAMES = {
     "hunyuan": "yuanbao",
 }
@@ -42,12 +41,25 @@ class MobileGatewayAdapter(PlatformAdapter):
         self.platform_name = platform_name
 
     async def query(self, prompts: list[str]) -> list[PlatformResponse]:
-        # A gateway owns one physical device, so preserve prompt order and avoid
-        # filling the queue with an entire platform batch at once.
-        responses = []
+        if not prompts:
+            return []
+
+        # Queue the complete platform batch before waiting so the gateway can
+        # distribute independent prompts across its available device pool.
+        queued: list[DeviceTask | BaseException] = []
         for prompt in prompts:
-            responses.append(await self._query_single(prompt))
-        return responses
+            try:
+                queued.append(await self._enqueue_task(prompt))
+            except Exception as exc:
+                queued.append(exc)
+        return list(
+            await asyncio.gather(
+                *(
+                    self._query_enqueued(prompt, task_or_error)
+                    for prompt, task_or_error in zip(prompts, queued, strict=True)
+                )
+            )
+        )
 
     async def health_check(self) -> bool:
         gateway_id = self._target_gateway_id()
@@ -62,10 +74,33 @@ class MobileGatewayAdapter(PlatformAdapter):
             return gateway.last_seen_at >= datetime.utcnow() - timedelta(seconds=90)
 
     async def _query_single(self, prompt: str) -> PlatformResponse:
-        started = time.monotonic()
         try:
             task = await self._enqueue_task(prompt)
-            completed = await self._wait_for_task(task.id)
+        except Exception as exc:
+            return self._error_response(
+                prompt,
+                ErrorCode.UNKNOWN,
+                str(exc),
+                time.monotonic(),
+            )
+        return await self._query_enqueued(prompt, task)
+
+    async def _query_enqueued(
+        self,
+        prompt: str,
+        task_or_error: DeviceTask | BaseException,
+    ) -> PlatformResponse:
+        started = time.monotonic()
+        if isinstance(task_or_error, BaseException):
+            return self._error_response(
+                prompt,
+                ErrorCode.UNKNOWN,
+                str(task_or_error),
+                started,
+            )
+
+        try:
+            completed = await self._wait_for_task(task_or_error.id)
         except TimeoutError as exc:
             return self._error_response(
                 prompt,
@@ -110,7 +145,7 @@ class MobileGatewayAdapter(PlatformAdapter):
                 error_message="Mobile gateway returned an invalid result",
                 latency_ms=latency_ms,
                 raw_response=result if isinstance(result, dict) else {"result": result},
-                request_params=self._request_metadata(prompt, completed.id),
+                request_params=self._request_metadata(prompt, task_or_error.id),
             )
 
         citations = self._normalize_citations(result)
