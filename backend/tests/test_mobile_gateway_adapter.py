@@ -1,7 +1,7 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
-
 from app.adapters.base import ErrorCode
 from app.adapters.mobile_gateway import MobileGatewayAdapter, mobile_capture_enabled
 from app.config import settings
@@ -200,3 +200,42 @@ def test_capture_quality_counts_missing_reference_records_as_failures():
         "source_completeness": pytest.approx(1 / 3),
         "capture_status": "partial",
     }
+
+
+@pytest.mark.asyncio
+async def test_mobile_query_enqueues_complete_batch_before_waiting(monkeypatch):
+    adapter = MobileGatewayAdapter("deepseek")
+    prompts = ["问题一", "问题二", "问题三"]
+    enqueued: list[str] = []
+    all_enqueued = asyncio.Event()
+
+    async def enqueue(prompt):
+        enqueued.append(prompt)
+        if len(enqueued) == len(prompts):
+            all_enqueued.set()
+        return SimpleNamespace(id=f"task-{len(enqueued)}")
+
+    async def wait(task_id):
+        await asyncio.wait_for(all_enqueued.wait(), timeout=1)
+        index = int(task_id.rsplit("-", 1)[1]) - 1
+        return SimpleNamespace(
+            id=task_id,
+            status="completed",
+            result={"answer": f"回答{index + 1}"},
+            error_message=None,
+            error_code=None,
+            attempt_count=1,
+        )
+
+    monkeypatch.setattr(adapter, "_enqueue_task", enqueue)
+    monkeypatch.setattr(adapter, "_wait_for_task", wait)
+
+    responses = await adapter.query(prompts)
+
+    assert enqueued == prompts
+    assert [response.prompt for response in responses] == prompts
+    assert [response.response_text for response in responses] == [
+        "回答1",
+        "回答2",
+        "回答3",
+    ]

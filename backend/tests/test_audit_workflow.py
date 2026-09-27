@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
-
+from app.adapters.base import PlatformResponse
+from app.adapters.mobile_gateway import MobileGatewayAdapter
 from app.main import app
 from app.models.models import (
     Audit,
@@ -19,10 +19,8 @@ from app.models.models import (
     QueryStatus,
     ResponseAnalysis,
 )
-from app.services import audit_service
-from app.services import response_analysis_service
-from app.adapters.base import PlatformResponse
-from app.adapters.mobile_gateway import MobileGatewayAdapter
+from app.services import audit_service, response_analysis_service
+from sqlalchemy import select
 
 
 class _FakeAdapter:
@@ -51,7 +49,7 @@ MOCK_LLM_RESPONSE = {
 
 
 @pytest.mark.asyncio
-async def test_mobile_platform_queries_are_serialized_while_api_queries_run():
+async def test_mobile_and_api_platform_queries_run_concurrently():
     adapters = [
         MobileGatewayAdapter("deepseek"),
         _FakeAdapter("api-platform"),
@@ -76,7 +74,7 @@ async def test_mobile_platform_queries_are_serialized_while_api_queries_run():
 
     outcomes = await audit_service._collect_platform_query_outcomes(adapters, runner)
 
-    assert max_active_mobile == 1
+    assert max_active_mobile == 2
     assert set(outcomes) == {"deepseek", "qwen", "api-platform"}
 
 
