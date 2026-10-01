@@ -1,0 +1,26 @@
+name: Compose configuration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest PyYAML
+      - run: python -m pytest tests/test_docker_compose_auth.py -q
+      - name: Validate production Compose configuration
+        env:
+          AISCOPE_SECRET_KEY: ci-placeholder
+          AISCOPE_DEVICE_GATEWAY_TOKEN: ci-placeholder
+          AISCOPE_DATABASE_URL: mysql+aiomysql://test:test@db.example:3306/aiscope
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
