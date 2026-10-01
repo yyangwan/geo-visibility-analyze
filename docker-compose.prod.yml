@@ -8,6 +8,8 @@ services:
     command: []
     restart: unless-stopped
     environment:
+      # External MySQL (for example Tencent Cloud); local MySQL remains the fallback.
+      AISCOPE_DATABASE_URL: ${AISCOPE_DATABASE_URL:-mysql+aiomysql://aiscope:aiscope@mysql:3306/aiscope}
       AISCOPE_DEVICE_GATEWAY_TOKEN: ${AISCOPE_DEVICE_GATEWAY_TOKEN:?AISCOPE_DEVICE_GATEWAY_TOKEN must be set}
       AISCOPE_DEVICE_GATEWAY_IDS: ${AISCOPE_DEVICE_GATEWAY_IDS:-CHAO}
       AISCOPE_DEVICE_GATEWAY_LEASE_SECONDS: ${AISCOPE_DEVICE_GATEWAY_LEASE_SECONDS:-120}
