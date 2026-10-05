@@ -40,6 +40,14 @@ class MobileGatewayAdapter(PlatformAdapter):
         super().__init__()
         self.platform_name = platform_name
 
+    @property
+    def _surface(self) -> str:
+        return "web" if self.platform_name == "qwen" else "app"
+
+    @property
+    def _capture_mode(self) -> str:
+        return "web_browser" if self._surface == "web" else "mobile_app"
+
     async def query(self, prompts: list[str]) -> list[PlatformResponse]:
         if not prompts:
             return []
@@ -157,7 +165,10 @@ class MobileGatewayAdapter(PlatformAdapter):
             response_text=result["answer"],
             latency_ms=int(result.get("duration_ms") or latency_ms),
             citations=citations,
-            response_model=f"app:{app_version}" if app_version else "app",
+            response_model=(
+                "web" if self._surface == "web" else
+                f"app:{app_version}" if app_version else "app"
+            ),
             finish_reason="stop",
             search_enabled=bool(
                 result.get("reference_count")
@@ -167,8 +178,8 @@ class MobileGatewayAdapter(PlatformAdapter):
             raw_response=result,
             raw_response_text=result["answer"],
             search_metadata={
-                "capture_mode": "mobile_app",
-                "surface": result.get("surface", "app"),
+                "capture_mode": self._capture_mode,
+                "surface": result.get("surface", self._surface),
                 "package_name": result.get("package_name"),
                 "app_version": result.get("app_version"),
                 "device_serial": result.get("device_serial"),
@@ -197,18 +208,18 @@ class MobileGatewayAdapter(PlatformAdapter):
             "timeout_seconds": settings.mobile_app_capture_task_timeout_seconds,
             "new_conversation": True,
         }
-        if settings.mobile_app_capture_device_serial:
+        if self._surface == "app" and settings.mobile_app_capture_device_serial:
             payload["device_serial"] = settings.mobile_app_capture_device_serial
 
         data = DeviceTaskCreate(
             project_id=project_id,
-            task_type="appium.prompt",
+            task_type="browser.prompt" if self._surface == "web" else "appium.prompt",
             target_gateway_id=self._target_gateway_id(),
             platform=_GATEWAY_PLATFORM_NAMES.get(
                 self.platform_name,
                 self.platform_name,
             ),
-            surface="app",
+            surface=self._surface,
             payload=payload,
             priority=settings.mobile_app_capture_priority,
             max_attempts=settings.mobile_app_capture_max_attempts,
@@ -244,14 +255,14 @@ class MobileGatewayAdapter(PlatformAdapter):
 
     def _request_metadata(self, prompt: str, task_id: str) -> dict:
         return {
-            "capture_mode": "mobile_app",
+            "capture_mode": self._capture_mode,
             "task_id": task_id,
             "gateway_id": self._target_gateway_id(),
             "platform": _GATEWAY_PLATFORM_NAMES.get(
                 self.platform_name,
                 self.platform_name,
             ),
-            "surface": "app",
+            "surface": self._surface,
             "prompt": prompt,
             "timeout_seconds": settings.mobile_app_capture_task_timeout_seconds,
         }
@@ -281,7 +292,9 @@ class MobileGatewayAdapter(PlatformAdapter):
                     "status": source.get("status", "collected"),
                     "error_message": source.get("error_message"),
                     "provider": "mobile_gateway",
-                    "citation_mode": "mobile_app_reference",
+                    "citation_mode": (
+                        "web_reference" if self._surface == "web" else "mobile_app_reference"
+                    ),
                 }
             )
         return citations
