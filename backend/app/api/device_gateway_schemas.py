@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-TaskType = Literal["gateway.healthcheck", "appium.prompt"]
+TaskType = Literal["gateway.healthcheck", "appium.prompt", "browser.prompt"]
 TaskSurface = Literal["web", "app"]
 
 
@@ -21,12 +21,14 @@ class DeviceTaskCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_target(self):
-        if self.task_type == "appium.prompt":
+        if self.task_type in {"appium.prompt", "browser.prompt"}:
             if not self.platform or not self.surface:
-                raise ValueError("appium.prompt requires platform and surface")
+                raise ValueError(f"{self.task_type} requires platform and surface")
+            if self.task_type == "browser.prompt" and self.surface != "web":
+                raise ValueError("browser.prompt requires web surface")
             prompt = self.payload.get("prompt")
             if not isinstance(prompt, str) or not prompt.strip():
-                raise ValueError("appium.prompt requires a non-empty payload.prompt")
+                raise ValueError(f"{self.task_type} requires a non-empty payload.prompt")
         return self
 
 

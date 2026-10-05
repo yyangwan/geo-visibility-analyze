@@ -4,9 +4,47 @@ from types import SimpleNamespace
 import pytest
 from app.adapters.base import ErrorCode
 from app.adapters.mobile_gateway import MobileGatewayAdapter, mobile_capture_enabled
+from app.api.device_gateway_schemas import DeviceTaskCreate
 from app.config import settings
 from app.services.audit_service import _build_persisted_citations
 from app.services.source_extraction import ExtractedSource
+
+
+def test_browser_prompt_requires_web_surface_and_prompt():
+    with pytest.raises(ValueError):
+        DeviceTaskCreate(project_id="p", task_type="browser.prompt", platform="qwen", surface="app", payload={"prompt": "hello"})
+    with pytest.raises(ValueError):
+        DeviceTaskCreate(project_id="p", task_type="browser.prompt", platform="qwen", surface="web", payload={})
+
+
+def test_qwen_uses_web_capture_metadata():
+    adapter = MobileGatewayAdapter("qwen")
+    assert adapter._surface == "web"
+    assert adapter._request_metadata("question", "task-1")["capture_mode"] == "web_browser"
+    assert adapter._normalize_citations({"sources": [{"url": "https://example.com/a"}]})[0]["citation_mode"] == "web_reference"
+
+
+@pytest.mark.asyncio
+async def test_qwen_enqueues_browser_task_without_device_serial(monkeypatch):
+    from app.adapters import mobile_gateway as module
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    async def create_task(_db, data):
+        return data
+
+    monkeypatch.setattr(module, "async_session", lambda: Session())
+    monkeypatch.setattr(module, "create_task", create_task)
+    monkeypatch.setattr(settings, "mobile_app_capture_device_serial", "phone-1")
+    task = await MobileGatewayAdapter("qwen")._enqueue_task("推荐咖啡壶")
+    assert task.task_type == "browser.prompt"
+    assert task.surface == "web"
+    assert "device_serial" not in task.payload
 
 
 def test_mobile_capture_switch_respects_platforms_and_config(monkeypatch):
