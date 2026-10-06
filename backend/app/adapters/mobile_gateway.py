@@ -246,12 +246,15 @@ class MobileGatewayAdapter(PlatformAdapter):
 
     @staticmethod
     def _wait_timeout_seconds() -> int:
-        # The gateway can retry on other devices before collecting citations.
+        # A response timeout is per attempt; citation collection starts after
+        # the successful response and can take much longer than generation.
+        attempts = settings.mobile_app_capture_max_attempts
         return max(
             settings.mobile_app_capture_wait_timeout_seconds,
-            settings.mobile_app_capture_max_attempts
-            * settings.mobile_app_capture_task_timeout_seconds
-            + 900,
+            attempts * settings.mobile_app_capture_task_timeout_seconds
+            + max(0, attempts - 1) * 30
+            + 1800  # citation collection on the successful attempt
+            + 300,  # queueing and device handoff
         )
 
     def _target_gateway_id(self) -> str | None:
