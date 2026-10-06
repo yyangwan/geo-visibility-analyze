@@ -24,6 +24,15 @@ def test_qwen_uses_web_capture_metadata():
     assert adapter._normalize_citations({"sources": [{"url": "https://example.com/a"}]})[0]["citation_mode"] == "web_reference"
 
 
+def test_mobile_task_wait_covers_retries_and_source_collection(monkeypatch):
+    monkeypatch.setattr(settings, "mobile_app_capture_wait_timeout_seconds", 1200)
+    monkeypatch.setattr(settings, "mobile_app_capture_task_timeout_seconds", 420)
+    monkeypatch.setattr(settings, "mobile_app_capture_max_attempts", 3)
+    assert MobileGatewayAdapter._wait_timeout_seconds() == 2160
+    monkeypatch.setattr(settings, "mobile_app_capture_wait_timeout_seconds", 2400)
+    assert MobileGatewayAdapter._wait_timeout_seconds() == 2400
+
+
 @pytest.mark.asyncio
 async def test_qwen_enqueues_browser_task_without_device_serial(monkeypatch):
     from app.adapters import mobile_gateway as module

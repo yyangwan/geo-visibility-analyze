@@ -229,7 +229,8 @@ class MobileGatewayAdapter(PlatformAdapter):
             return await create_task(db, data)
 
     async def _wait_for_task(self, task_id: str) -> DeviceTask:
-        deadline = time.monotonic() + settings.mobile_app_capture_wait_timeout_seconds
+        wait_seconds = self._wait_timeout_seconds()
+        deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
             async with async_session() as db:
                 task = await db.get(DeviceTask, task_id)
@@ -240,7 +241,17 @@ class MobileGatewayAdapter(PlatformAdapter):
             await asyncio.sleep(settings.mobile_app_capture_poll_interval_seconds)
         raise TimeoutError(
             f"Timed out waiting for mobile gateway task {task_id} after "
-            f"{settings.mobile_app_capture_wait_timeout_seconds}s"
+            f"{wait_seconds}s"
+        )
+
+    @staticmethod
+    def _wait_timeout_seconds() -> int:
+        # The gateway can retry on other devices before collecting citations.
+        return max(
+            settings.mobile_app_capture_wait_timeout_seconds,
+            settings.mobile_app_capture_max_attempts
+            * settings.mobile_app_capture_task_timeout_seconds
+            + 900,
         )
 
     def _target_gateway_id(self) -> str | None:
