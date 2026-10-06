@@ -28,9 +28,9 @@ def test_mobile_task_wait_covers_retries_and_source_collection(monkeypatch):
     monkeypatch.setattr(settings, "mobile_app_capture_wait_timeout_seconds", 1200)
     monkeypatch.setattr(settings, "mobile_app_capture_task_timeout_seconds", 420)
     monkeypatch.setattr(settings, "mobile_app_capture_max_attempts", 3)
-    assert MobileGatewayAdapter._wait_timeout_seconds() == 2160
-    monkeypatch.setattr(settings, "mobile_app_capture_wait_timeout_seconds", 2400)
-    assert MobileGatewayAdapter._wait_timeout_seconds() == 2400
+    assert MobileGatewayAdapter._wait_timeout_seconds() == 3420
+    monkeypatch.setattr(settings, "mobile_app_capture_wait_timeout_seconds", 4000)
+    assert MobileGatewayAdapter._wait_timeout_seconds() == 4000
 
 
 @pytest.mark.asyncio
