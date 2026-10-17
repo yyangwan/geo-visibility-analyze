@@ -16,6 +16,7 @@
 | --- | --- |
 | [运行与首次启用](docs/citation-intelligence-runtime.md) | 配置、迁移、worker、实现记录及尚未完成的验收 |
 | [镜像发布与独立联调](docs/citation-intelligence-image-release.md) | PR/main 镜像流程、镜像传输、独立 API/worker 与停止步骤 |
+| [生产部署与回退](docs/citation-intelligence-production-deploy.md) | 手动 main 发布、新库保护、API/worker 蓝绿切换及首次 legacy 回退 |
 | [本地 Docker MySQL](docs/citation-intelligence-local-mysql.md) | 专用空库、隔离测试库及本地验证边界 |
 | [正文存储验收](docs/citation-intelligence-storage-check.md) | OSS 配置检查、显式对象探针及失败报告 |
 | [近期真实输入准备](docs/citation-intelligence-acceptance-intake.md) | 只读冻结近期输入，准备人工核对 |

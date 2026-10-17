@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import shutil
 import tempfile
 from uuid import uuid4
@@ -17,10 +18,12 @@ MIN_TEMP_FREE_BYTES = 256 * 1024 * 1024
 
 
 class WorkerMonitor:
-    def __init__(self, session_factory, blobs):
+    def __init__(self, session_factory, blobs, monitor_id=None):
+        if monitor_id is not None and not re.fullmatch(r"[a-f0-9]{32}", monitor_id):
+            raise ValueError("Worker monitor identity must be 32 lowercase hex characters")
         self.sessions = session_factory
         self.blobs = blobs
-        self.id = uuid4().hex
+        self.id = uuid4().hex if monitor_id is None else monitor_id
         self.state = "idle"
         self.storage_status = "unknown"
         self.disk_status = "unknown"

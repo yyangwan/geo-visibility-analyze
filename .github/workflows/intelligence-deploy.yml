@@ -1,0 +1,90 @@
+name: Deploy citation intelligence
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full current main SHA with a successful Backend source and worker publication
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  packages: read
+concurrency:
+  group: intelligence-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify current published main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          RUN=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow backend-ci.yml \
+            --branch main --event push --commit "$RELEASE_SHA" --status success \
+            --limit 10 --json databaseId --jq '.[0].databaseId // empty')
+          test -n "$RUN"
+      - name: Configure dedicated transfer access
+        env:
+          STORAGE_SSH_KEY: ${{ secrets.CITATION_STORAGE_SSH_KEY }}
+          STORAGE_KNOWN_HOSTS: ${{ secrets.CITATION_STORAGE_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$STORAGE_SSH_KEY"
+          test -n "$STORAGE_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STORAGE_SSH_KEY" > ~/.ssh/citation_storage
+          printf '%s\n' "$STORAGE_KNOWN_HOSTS" > ~/.ssh/citation_storage_known_hosts
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Transfer and deploy immutable release
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          STORAGE_HOST: ${{ secrets.CITATION_STORAGE_HOST }}
+          STORAGE_USER: ${{ secrets.CITATION_STORAGE_USER }}
+        run: |
+          set -euo pipefail
+          [[ "$STORAGE_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$STORAGE_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          IMAGE="ghcr.io/yyangwan/geo-visibility-analyze:$RELEASE_SHA"
+          TARGET="$STORAGE_USER@$STORAGE_HOST"
+          SSH=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=20
+            -o UserKnownHostsFile="$HOME/.ssh/citation_storage_known_hosts"
+            -i "$HOME/.ssh/citation_storage")
+          ssh "${SSH[@]}" "$TARGET" 'set -eu; command -v docker >/dev/null; test "$(df -Pk /var/lib/docker | awk "NR==2 {print \$4}")" -ge 3145728; test "$(awk "/MemAvailable:/ {print \$2}" /proc/meminfo)" -ge 786432'
+          docker pull "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_SHA"
+          docker save "$IMAGE" | gzip -1 | ssh "${SSH[@]}" "$TARGET" "bash -o pipefail -c 'gzip -d | docker load'"
+          ssh "${SSH[@]}" "$TARGET" "bash -s -- $RELEASE_SHA" <<'REMOTE'
+          set -euo pipefail
+          SHA="$1"
+          [[ "$SHA" =~ ^[a-f0-9]{40}$ ]]
+          cd /opt/geo-visibility-analyze
+          test "$(git branch --show-current)" = main
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SHA"
+          git pull --ff-only origin main
+          test "$(git rev-parse HEAD)" = "$SHA"
+          bash deploy/deploy-intelligence.sh deploy "$SHA"
+          REMOTE
+      - name: Remove ephemeral runner credentials
+        if: always()
+        run: rm -f ~/.ssh/citation_storage ~/.ssh/citation_storage_known_hosts

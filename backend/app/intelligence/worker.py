@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import signal
 import socket
 from uuid import uuid4
@@ -73,7 +74,9 @@ async def main():
             loop.add_signal_handler(name, stop.set)
         except NotImplementedError:
             signal.signal(name, lambda *_: loop.call_soon_threadsafe(stop.set))
-    monitor = WorkerMonitor(async_session, blobs)
+    monitor = WorkerMonitor(
+        async_session, blobs, os.getenv("AISCOPE_INTELLIGENCE_WORKER_MONITOR_ID")
+    )
     await monitor.beat()
     tasks = [
         asyncio.create_task(monitor.heartbeat_loop()),
