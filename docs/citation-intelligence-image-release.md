@@ -10,6 +10,18 @@
 
 ## 独立联调环境
 
+### 单独验证真实 OSS
+
+`.github/workflows/intelligence-storage-check.yml` 提供仅手动触发的 `Citation OSS acceptance` 流程。选择 `main` 分支并传入完整 `release_sha`；流程检查该提交属于 main 且已有成功的 main 镜像发布记录，再在 runner 拉取、核对 revision 并以带 keepalive 的 SSH 流式加载到 ECS。它不更新服务器应用源码、不连接数据库、不启动 API/worker，也不切换入口。
+
+需要在后端仓库配置四个 Actions secret：`CITATION_STORAGE_HOST`、`CITATION_STORAGE_USER`、专用传输私钥 `CITATION_STORAGE_SSH_KEY` 和预先通过可信通道核对的主机公钥 `CITATION_STORAGE_KNOWN_HOSTS`。不要复用或公开个人私钥、云 AccessKey；不通过未核对的即时 keyscan 接受目标主机。当前仓库尚未配置这些凭据，因此新增流程本身不代表完成云端验收。
+
+传输前要求 Docker 所在文件系统至少有 3 GiB 可用、可用内存至少 768 MiB；不足时直接停止，不自动清理。独立探针容器限制 CPU、内存和进程数，以只读根目录运行，使用 ECS IMDSv2 临时角色凭证；容器退出后删除该临时容器，镜像和非业务探针对象保留。私有报告保存在 `/opt/genilink-storage-checks/<SHA>-<run_id>-<attempt>/report.json`，不会上传 Actions 制品，也不输出临时凭证。重复执行使用独立目录。
+
+报告通过仍仅证明对象存储验收，不构成产品上线。完整 API/worker 联调需要下述独立配置和新数据库。
+
+### API 与 worker
+
 `compose.intelligence-runtime.yml` 是独立 Compose 项目，不能作为旧生产 Compose 的覆盖文件使用。没有 build、源码挂载或自动迁移；`pull_policy: never` 要求事先加载经 CI 验证的镜像。仅 API 绑定 `127.0.0.1:18016`（可通过 `INTELLIGENCE_API_PORT` 调整），不切换现有入口。
 
 在目标环境的私密配置文件中提供新数据库 URL、服务认证配置和 OSS 配置。文件不得入库或上传 CI 制品。至少包括：

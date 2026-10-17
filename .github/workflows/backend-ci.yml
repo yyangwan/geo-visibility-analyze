@@ -1,10 +1,10 @@
 name: Backend source and worker
 on:
   pull_request:
-    paths: ['backend/**', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml']
+    paths: ['backend/**', 'deploy/check-intelligence-storage.sh', 'tests/test_intelligence_storage_transport.py', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml', '.github/workflows/intelligence-storage-check.yml']
   push:
     branches: [main]
-    paths: ['backend/**', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml']
+    paths: ['backend/**', 'deploy/check-intelligence-storage.sh', 'tests/test_intelligence_storage_transport.py', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml', '.github/workflows/intelligence-storage-check.yml']
 permissions:
   contents: read
 jobs:

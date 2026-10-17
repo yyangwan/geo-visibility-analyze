@@ -1,0 +1,69 @@
+name: Citation OSS acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full main commit with a successful Backend source and worker publication
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  group: citation-oss-acceptance
+  cancel-in-progress: false
+
+jobs:
+  storage:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify published main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git fetch origin main "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          RUN=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow backend-ci.yml \
+            --branch main --event push --commit "$RELEASE_SHA" --status success \
+            --limit 10 --json databaseId --jq '.[0].databaseId // empty')
+          test -n "$RUN"
+      - name: Configure dedicated transfer access
+        env:
+          STORAGE_SSH_KEY: ${{ secrets.CITATION_STORAGE_SSH_KEY }}
+          STORAGE_KNOWN_HOSTS: ${{ secrets.CITATION_STORAGE_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STORAGE_SSH_KEY"
+          test -n "$STORAGE_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STORAGE_SSH_KEY" > ~/.ssh/citation_storage
+          printf '%s\n' "$STORAGE_KNOWN_HOSTS" > ~/.ssh/citation_storage_known_hosts
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Transfer immutable image and verify ECS role storage
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          STORAGE_HOST: ${{ secrets.CITATION_STORAGE_HOST }}
+          STORAGE_USER: ${{ secrets.CITATION_STORAGE_USER }}
+        run: bash deploy/check-intelligence-storage.sh
+      - name: Remove ephemeral runner credentials
+        if: always()
+        run: rm -f ~/.ssh/citation_storage ~/.ssh/citation_storage_known_hosts
