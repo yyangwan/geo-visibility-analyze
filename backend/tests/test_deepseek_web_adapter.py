@@ -9,6 +9,7 @@ from app.adapters.base import PlatformResponse
 from app.adapters.deepseek import DeepSeekAdapter
 from app.adapters.deepseek_web import DeepSeekWebAdapter
 from app.adapters.openai_compat import OpenAICompatAdapter
+from app.config import settings
 from app.services.response_parser import (
     align_deepseek_web_citations,
     extract_deepseek_web_text,
@@ -105,7 +106,12 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_web_adapter_parses_stream_payload(monkeypatch):
+@pytest.mark.parametrize("default_parent, expected_parent", [("", None), ("2", 2)])
+async def test_deepseek_web_adapter_parses_stream_payload(
+    monkeypatch, default_parent, expected_parent
+):
+    # Test environment fallback explicitly, independent of developer .env values.
+    monkeypatch.setattr(settings, "deepseek_web_parent_message_id", default_parent)
     adapter = DeepSeekWebAdapter()
     adapter.set_platform_config(
         {
@@ -169,7 +175,8 @@ async def test_deepseek_web_adapter_parses_stream_payload(monkeypatch):
     assert result.request_params["prompt"] == "What is Alpha?"
     assert result.request_params["chat_session_id"] == "c515607d-e3ba-4586-9473-9fc32951d407"
     assert "parent_message_id" in result.request_params
-    assert result.request_params["parent_message_id"] == 2
+    assert result.request_params["parent_message_id"] == expected_parent
+    assert client.calls[0]["json"]["parent_message_id"] == expected_parent
     assert result.request_params["model_type"] == "default"
     assert result.request_params["thinking_enabled"] is False
     assert result.request_params["search_enabled"] is True

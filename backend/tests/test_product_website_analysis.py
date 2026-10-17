@@ -628,17 +628,20 @@ async def test_product_website_trends(client: AsyncClient, db_session):
 
 
 @pytest.mark.asyncio
-async def test_product_website_trends_filters_range_and_keeps_latest_run_per_day(client: AsyncClient, db_session):
+@pytest.mark.parametrize("hour", [1, 12, 23])
+async def test_product_website_trends_filters_range_and_keeps_latest_run_per_day(client: AsyncClient, db_session, hour):
     project_id = "proj-product-trends-range"
 
     async def override_current_user():
         return {"scope": "project", "pid": project_id}
 
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 10, 17, hour, 30, tzinfo=timezone.utc)
+    # Keep both recent runs on one UTC day even when the request runs near midnight.
+    recent_day = now.replace(hour=0, minute=0) - timedelta(days=1)
     for score, created_at in [
         (40.0, now - timedelta(days=40)),
-        (60.0, now - timedelta(hours=2)),
-        (70.0, now - timedelta(hours=1)),
+        (60.0, recent_day + timedelta(hours=10)),
+        (70.0, recent_day + timedelta(hours=11)),
     ]:
         db_session.add(ProductWebsiteAnalysis(
             workspace_id="workspace-1",
@@ -657,7 +660,9 @@ async def test_product_website_trends_filters_range_and_keeps_latest_run_per_day
 
     app.dependency_overrides[get_current_user] = override_current_user
     try:
-        resp = await client.get(f"/api/product-website/projects/{project_id}/trends?range=30d")
+        with patch("app.api.product_website.datetime", wraps=datetime) as clock:
+            clock.now.return_value = now
+            resp = await client.get(f"/api/product-website/projects/{project_id}/trends?range=30d")
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 

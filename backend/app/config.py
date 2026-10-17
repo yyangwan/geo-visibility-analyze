@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     analysis_llm_model: str = ""
     analysis_timeout_seconds: int = 120
 
+    # New citation-intelligence worker. Opt in after schema and OSS verification.
+    intelligence_enabled: bool = False
+    intelligence_environment: str = "production"
+    intelligence_blob_backend: str = "oss"
+    intelligence_blob_root: str = ".intelligence-blobs"
+    intelligence_oss_bucket: str = ""
+    intelligence_oss_role: str = ""
+    intelligence_oss_endpoint: str = "https://oss-cn-wulanchabu-internal.aliyuncs.com"
+    intelligence_model_request_limit: int = 500
+    intelligence_source_byte_limit: int = 4 * 1024 * 1024
+    intelligence_refresh_debounce_seconds: int = 60
+    intelligence_auto_refresh_limit: int = 3
+
     # Product website crawler settings
     product_website_crawler_provider: str = "native"
     product_website_crawler_timeout_seconds: int = 30

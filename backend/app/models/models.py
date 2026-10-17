@@ -15,6 +15,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.mysql import LONGTEXT
 
 from app.database import Base
 
@@ -150,7 +151,7 @@ class PlatformResponseRecord(Base):
     audit_id: Mapped[int] = mapped_column(Integer, ForeignKey("audits.id"))
     prompt_id: Mapped[int] = mapped_column(Integer, ForeignKey("prompts.id"))
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
-    response_text: Mapped[str] = mapped_column(Text, nullable=True)
+    response_text: Mapped[str] = mapped_column(Text().with_variant(LONGTEXT(), "mysql"), nullable=True)
     citations: Mapped[list] = mapped_column(JSON, default=list)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)

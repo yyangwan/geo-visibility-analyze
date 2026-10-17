@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ARG DEPLOYMENT_VERSION=local
+LABEL org.opencontainers.image.revision=$DEPLOYMENT_VERSION
+
 WORKDIR /app
 
 COPY requirements.txt .
