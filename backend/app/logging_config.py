@@ -4,6 +4,7 @@ Provides JSON logging for production and human-readable console output for dev.
 """
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
@@ -48,7 +49,8 @@ def setup_logging(debug: bool = False) -> None:
         ],
     )
 
-    log_dir = Path(__file__).resolve().parents[1] / "logs"
+    configured_directory = os.getenv("AISCOPE_LOG_DIRECTORY")
+    log_dir = Path(configured_directory) if configured_directory else Path(__file__).resolve().parents[1] / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "audit.log"
 

@@ -1,0 +1,16 @@
+.env
+.env.*
+**/.env
+**/.env.*
+.git
+.gstack
+test-results
+.keys
+**/.keys
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+logs
+tests
+.venv

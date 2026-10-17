@@ -303,6 +303,8 @@ class MobileGatewayAdapter(PlatformAdapter):
                     "site_name": str(source.get("site_name") or ""),
                     "index": source.get("index", position),
                     "url_resolution": source.get("url_resolution", "unavailable"),
+                    "snippet": str(source.get("snippet") or source.get("summary") or ""),
+                    "kind": source.get("kind", "unknown"),
                     "status": source.get("status", "collected"),
                     "error_message": source.get("error_message"),
                     "provider": "mobile_gateway",

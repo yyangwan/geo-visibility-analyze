@@ -1,0 +1,90 @@
+name: Backend source and worker
+on:
+  pull_request:
+    paths: ['backend/**', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml']
+  push:
+    branches: [main]
+    paths: ['backend/**', 'compose.intelligence-runtime.yml', '.github/workflows/backend-ci.yml']
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-password
+          MYSQL_DATABASE: intelligence_ci
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pci-password"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      AISCOPE_SECRET_KEY: ci-only-secret
+      AISCOPE_DEBUG: '1'
+      AISCOPE_DATABASE_URL: mysql+aiomysql://root:ci-password@127.0.0.1:3306/intelligence_ci
+      AISCOPE_INTELLIGENCE_TEST_DATABASE_URL: mysql+aiomysql://root:ci-password@127.0.0.1:3306/intelligence_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y libpango-1.0-0 libpangoft2-1.0-0
+      - run: python -m pip install -r requirements.txt ruff==0.17.0
+      - run: python -m compileall -q app scripts/check_intelligence_image.py
+      - run: ruff check app/intelligence app/api/intelligence.py scripts/check_intelligence_image.py tests/test_intelligence*.py --ignore B008,SIM117,BLE001
+      - name: Reviewed empty-database migration
+        run: python -m alembic upgrade head
+      - name: Full backend regression and real-MySQL concurrency
+        run: python -m pytest tests -q --tb=short
+  container:
+    name: Validate and publish shared API and worker image
+    needs: source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build immutable image once
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          load: true
+          push: false
+          build-args: DEPLOYMENT_VERSION=${{ github.sha }}
+          tags: ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Offline image runtime acceptance
+        run: |
+          docker run --rm --network none \
+            --env AISCOPE_DEBUG=1 \
+            --env AISCOPE_SECRET_KEY=image-smoke-only \
+            --env AISCOPE_DATABASE_URL=mysql+aiomysql://unused:unused@127.0.0.1:1/unused \
+            ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }} \
+            python -m scripts.check_intelligence_image
+      - name: Validate isolated runtime Compose
+        env:
+          INTELLIGENCE_IMAGE: ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }}
+          INTELLIGENCE_ENV_FILE: /tmp/intelligence-ci.env
+        run: |
+          touch "$INTELLIGENCE_ENV_FILE"
+          docker compose -f compose.intelligence-runtime.yml --profile worker --profile maintenance config --quiet
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified SHA image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker push ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }}

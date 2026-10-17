@@ -1,0 +1,28 @@
+name: genilink-intelligence-local
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: genilink-intelligence-local-mysql
+    labels:
+      com.genilink.purpose: citation-intelligence-local
+    environment:
+      MYSQL_ROOT_PASSWORD: ${INTELLIGENCE_LOCAL_ROOT_PASSWORD:?Use the private local env file}
+      MYSQL_DATABASE: intelligence_dev_local
+      MYSQL_USER: intelligence_local
+      MYSQL_PASSWORD: ${INTELLIGENCE_LOCAL_PASSWORD:?Use the private local env file}
+      TZ: UTC
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+00:00"]
+    ports:
+      - "127.0.0.1:13316:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./scripts/intelligence-local-init.sql:/docker-entrypoint-initdb.d/intelligence-local-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysql --protocol=socket -uroot --batch --skip-column-names -e 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+volumes:
+  mysql-data:
+    name: genilink-intelligence-local-mysql-data

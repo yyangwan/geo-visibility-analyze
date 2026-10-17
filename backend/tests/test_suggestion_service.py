@@ -44,6 +44,9 @@ async def test_generate_suggestions_sends_evidence_to_both_passes(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "fake-test-key")
     audit, report = await _seed_suggestion_audit(db_session)
     captured_prompts: list[str] = []
 

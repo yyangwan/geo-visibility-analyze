@@ -2,11 +2,18 @@
 
 import os
 import asyncio
+from pathlib import Path
 from typing import AsyncGenerator
 
 # Set test env vars before importing app modules
 os.environ["AISCOPE_SECRET_KEY"] = "test-secret-key-for-pytest"
 os.environ["AISCOPE_DEBUG"] = "1"
+# Never pick up billable model credentials from the developer's .env during tests.
+# Tests exercising a provider must inject their own fake key and mock transport.
+for _provider in ("DEEPSEEK", "QWEN", "DOUBAO", "KIMI", "WENXIN", "HUNYUAN", "BOCHA", "LLM", "ANALYSIS_LLM", "FIRECRAWL"):
+    os.environ[f"AISCOPE_{_provider}_API_KEY"] = ""
+os.environ["AISCOPE_INTELLIGENCE_ENABLED"] = "0"
+os.environ["AISCOPE_LOG_DIRECTORY"] = str(Path(__file__).resolve().parents[2] / "test-results" / "backend-test-logs")
 
 import pytest
 import pytest_asyncio

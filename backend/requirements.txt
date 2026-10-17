@@ -10,6 +10,7 @@ python-dotenv==1.0.1
 alembic==1.13.0
 jinja2==3.1.4
 weasyprint==62.3
+reportlab==4.4.9
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
@@ -18,3 +19,5 @@ pymysql==1.1.1
 pytest==8.3.0
 pytest-asyncio==0.24.0
 aiosqlite==0.20.0
+oss2==2.19.1
+alibabacloud_credentials==1.0.12

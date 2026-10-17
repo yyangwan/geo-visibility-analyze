@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.audits import router as audits_router
 from app.api.analysis import router as analysis_router
+from app.api.intelligence import router as intelligence_router
 from app.api.auth import router as auth_router
 from app.api.integration import router as integration_router
 from app.api.device_gateway import gateway_router, task_router
@@ -19,7 +20,6 @@ from app.api.trends import router as trends_router
 from app.config import settings
 from app.logging_config import get_logger, setup_logging
 from app.middleware import RequestLoggingMiddleware
-from app.models.models import Base
 from app.utils.timezone import utcnow
 
 # Initialize structured logging
@@ -48,6 +48,7 @@ app.include_router(product_website_router, prefix="/api/product-website", tags=[
 app.include_router(prompts_router, prefix="/api/prompts", tags=["prompts"])
 app.include_router(audits_router, prefix="/api/audits", tags=["audits"])
 app.include_router(analysis_router, prefix="/api/analysis", tags=["analysis"])
+app.include_router(intelligence_router, prefix="/api/intelligence", tags=["intelligence"])
 app.include_router(schedules_router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(trends_router, prefix="/api/trends", tags=["trends"])
 app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
@@ -65,8 +66,8 @@ app.include_router(
 @app.on_event("startup")
 async def startup():
     logger.info("starting_app")
-    _run_upgrade_sync()
-    logger.info("upgrade_done")
+    _check_schema_revision()
+    logger.info("schema_verified")
     await _recover_orphan_audits()
     from app.services.scheduler import start_scheduler
 
@@ -83,45 +84,28 @@ async def shutdown():
     stop_scheduler()
 
 
-def _run_upgrade_sync():
-    """Run Alembic upgrade synchronously."""
-    from alembic import command
+def _check_schema_revision():
+    """Read-only startup: release migrations must finish before starting API workers."""
+    from pathlib import Path
     from alembic.config import Config
     from alembic.migration import MigrationContext
     from alembic.script import ScriptDirectory
-    from sqlalchemy import create_engine, inspect
+    from sqlalchemy import create_engine
 
     db_url = settings.database_url.replace("+aiomysql", "+pymysql")
-    alembic_cfg = Config("alembic.ini")
-    alembic_cfg.set_main_option("script_location", "alembic")
+    alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
 
     engine = create_engine(db_url)
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
-    required_tables = {"audits", "prompts", "platform_response_records"}
-    if not required_tables.issubset(existing_tables):
-        logger.warning(
-            "db_bootstrap_required",
-            missing_tables=sorted(required_tables - existing_tables),
-        )
-        Base.metadata.create_all(engine)
-        command.stamp(alembic_cfg, "head")
-        engine.dispose()
-        return
-
-    # Check if already at head - skip upgrade if so
     script = ScriptDirectory.from_config(alembic_cfg)
     head = script.get_current_head()
-    with engine.connect() as conn:
-        ctx = MigrationContext.configure(conn)
-        current = ctx.get_current_revision()
-    engine.dispose()
-
-    if current != head:
-        command.upgrade(alembic_cfg, "head")
-    else:
-        logger.info("db_already_at_head", current=current)
+    try:
+        with engine.connect() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+        if current != head:
+            raise RuntimeError("Schema mismatch: run the reviewed release migration on the designated new database")
+    finally:
+        engine.dispose()
 
 
 async def _recover_orphan_audits():
@@ -137,11 +121,13 @@ async def _recover_orphan_audits():
     from app.database import async_session
     from sqlalchemy import select
     from app.models.models import Audit, QueryStatus
+    from app.intelligence.models import SamplingAudit
     from app.services.audit_service import run_audit
 
     async with async_session() as db:
         running_result = await db.execute(
-            select(Audit).where(Audit.status == QueryStatus.RUNNING)
+            select(Audit).where(Audit.status == QueryStatus.RUNNING,
+                                ~Audit.id.in_(select(SamplingAudit.audit_id)))
         )
         running_audits = running_result.scalars().all()
         for audit in running_audits:
@@ -153,7 +139,8 @@ async def _recover_orphan_audits():
             logger.warning("running_audits_recovered", count=len(running_audits))
 
         pending_result = await db.execute(
-            select(Audit).where(Audit.status == QueryStatus.PENDING)
+            select(Audit).where(Audit.status == QueryStatus.PENDING,
+                                ~Audit.id.in_(select(SamplingAudit.audit_id)))
         )
         pending_audits = pending_result.scalars().all()
 

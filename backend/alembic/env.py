@@ -7,12 +7,14 @@ from app.config import settings
 from app.database import Base
 from app.models import models  # noqa: F401 - register models with Base
 from app.models import device_gateway  # noqa: F401 - register models with Base
+from app.intelligence import models as intelligence_models  # noqa: F401
+from app.intelligence.schema_lock import schema_lock
 
 config = context.config
 
 db_url = settings.database_url.replace("+aiomysql", "+pymysql")
 if "charset=" not in db_url:
-    db_url += "?charset=utf8mb4"
+    db_url += ("&" if "?" in db_url else "?") + "charset=utf8mb4"
 config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
@@ -41,11 +43,14 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+    try:
+        with connectable.connect() as connection, schema_lock(connection):
+            context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

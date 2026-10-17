@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings
 
 from app.adapters.base import ErrorCode, PlatformResponse
 from app.adapters.mobile_gateway import MobileGatewayAdapter, mobile_capture_enabled
@@ -493,6 +494,10 @@ async def run_audit(audit_id: int) -> None:
     if not should_analyze:
         return
 
+    if settings.intelligence_enabled:
+        # The new jobs were committed with the final audit state below.
+        return
+
     # Keep required post-audit analysis on the server lifecycle. Import here to
     # avoid the response-analysis service's BrandData import creating a cycle.
     try:
@@ -908,6 +913,10 @@ async def _execute_audit(db: AsyncSession, audit: Audit) -> None:
     audit.completed_at = utcnow()
     audit.locked_by_worker = None
     audit.locked_until = None
+    if settings.intelligence_enabled and audit.status in (QueryStatus.COMPLETED, QueryStatus.PARTIAL):
+        from app.intelligence.ingestion import prepare_run
+
+        await prepare_run(db, audit.project_id, audit.id)
     await db.commit()
 
     await _finish_stage(

@@ -1,0 +1,41 @@
+# Separate pre-release environment. Never layer this over the legacy production
+# Compose file. Supply an already-loaded SHA image and a private runtime env file.
+name: genilink-intelligence-runtime
+
+x-runtime: &runtime
+  image: ${INTELLIGENCE_IMAGE:?Set the verified full-SHA image}
+  pull_policy: never
+  env_file:
+    - ${INTELLIGENCE_ENV_FILE:?Set a private environment file for the new database}
+  init: true
+  restart: "no"
+  stop_grace_period: 45s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api:
+    <<: *runtime
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports:
+      - "127.0.0.1:${INTELLIGENCE_API_PORT:-18016}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 15s
+  worker:
+    <<: *runtime
+    profiles: ["worker"]
+    command: ["python", "-m", "app.intelligence.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+  migrate:
+    <<: *runtime
+    profiles: ["maintenance"]
+    command: ["python", "-m", "alembic", "upgrade", "head"]

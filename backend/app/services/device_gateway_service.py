@@ -148,7 +148,7 @@ async def get_leased_task(
     task_id: str,
     lease_token: str,
 ) -> DeviceTask:
-    task = await db.get(DeviceTask, task_id)
+    task = await db.scalar(select(DeviceTask).where(DeviceTask.id == task_id).with_for_update())
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     valid_token = (
@@ -191,7 +191,20 @@ async def complete_task(
     lease_token: str,
     result: dict,
 ) -> DeviceTask:
-    task = await get_leased_task(db, gateway_id, task_id, lease_token)
+    task = await db.scalar(select(DeviceTask).where(DeviceTask.id == task_id).with_for_update())
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    if task.payload.get("capture_contract_version") == 2:
+        from app.intelligence.sampling import accept_capture
+
+        if task.gateway_id != gateway_id:
+            raise HTTPException(409, "Task belongs to another gateway")
+        await accept_capture(db, task, lease_token, result)
+        if task.status == "completed":
+            await db.commit()
+            return task
+    else:
+        task = await get_leased_task(db, gateway_id, task_id, lease_token)
     task.status = "completed"
     task.result = result
     task.error_code = None
@@ -228,6 +241,10 @@ async def fail_task(
     else:
         task.status = "failed"
         task.completed_at = utcnow()
+    if task.payload.get("capture_contract_version") == 2 and task.status == "failed":
+        from app.intelligence.sampling import capture_failed
+
+        await capture_failed(db, task, error_code, retryable=retryable)
     await db.commit()
     await db.refresh(task)
     return task
