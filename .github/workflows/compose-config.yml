@@ -17,7 +17,17 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install pytest PyYAML
-      - run: python -m pytest tests/test_docker_compose_auth.py tests/test_intelligence_storage_transport.py -q
+      - run: python -m pytest tests/test_docker_compose_auth.py tests/test_intelligence_storage_transport.py tests/test_intelligence_deploy.py -q
+      - name: Validate intelligence production Compose configuration
+        env:
+          INTELLIGENCE_IMAGE: ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }}
+          INTELLIGENCE_ENV_FILE: /tmp/intelligence-ci.env
+          INTELLIGENCE_RELEASE_SHA: ${{ github.sha }}
+          INTELLIGENCE_WORKER_MONITOR_ID: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        run: |
+          touch "$INTELLIGENCE_ENV_FILE"
+          bash -n deploy/deploy-intelligence.sh
+          docker compose -f compose.intelligence-runtime.yml -f compose.intelligence-production.yml --profile worker --profile maintenance config --quiet
       - name: Validate production Compose configuration
         env:
           AISCOPE_SECRET_KEY: ci-placeholder

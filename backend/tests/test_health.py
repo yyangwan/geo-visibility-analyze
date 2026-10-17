@@ -15,8 +15,10 @@ async def test_health_advertises_product_website_idempotency(client: AsyncClient
             return None
 
     monkeypatch.setattr("app.database.async_session", HealthySession)
+    monkeypatch.setenv("DEPLOYMENT_VERSION", "a" * 40)
     response = await client.get("/api/health")
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["deploymentVersion"] == "a" * 40
     assert "product_website_idempotency_v1" in response.json()["capabilities"]

@@ -1,7 +1,9 @@
 """Auth API — JWT-only authentication via 智鏈 RS256 tokens.
 
-Development mode: supports local login/register when GENILINK_URL is not configured.
+Development mode: local login/register is available only with AISCOPE_DEBUG=1.
 """
+
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -44,6 +46,8 @@ _DEV_USERS: dict[str, str] = {}  # username -> password
 @router.post("/register", response_model=AuthUser)
 async def register_local(data: RegisterRequest):
     """Development-only local registration."""
+    if os.getenv("AISCOPE_DEBUG") != "1":
+        raise HTTPException(status_code=404, detail="Not found")
     if data.username in _DEV_USERS:
         raise HTTPException(status_code=400, detail="Username already exists")
     _DEV_USERS[data.username] = data.password
@@ -61,6 +65,8 @@ async def login_local(data: LoginRequest):
 
     For production, use GeniLink SSO instead.
     """
+    if os.getenv("AISCOPE_DEBUG") != "1":
+        raise HTTPException(status_code=404, detail="Not found")
     if data.username not in _DEV_USERS:
         # Auto-register for convenience
         _DEV_USERS[data.username] = data.password
@@ -86,6 +92,12 @@ async def get_current_user(
     """
     # Development: check for local fake token
     if token and token.startswith("local."):
+        if os.getenv("AISCOPE_DEBUG") != "1":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         parts = token.split(".")
         if len(parts) >= 2:
             username = parts[1]

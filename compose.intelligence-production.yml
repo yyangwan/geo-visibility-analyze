@@ -1,0 +1,23 @@
+# Layer only over compose.intelligence-runtime.yml, never the legacy stack.
+services:
+  api:
+    restart: unless-stopped
+    mem_limit: 640m
+    cpus: 0.75
+    environment:
+      DEPLOYMENT_VERSION: ${INTELLIGENCE_RELEASE_SHA:?Set the full release SHA}
+    networks: [default]
+  worker:
+    restart: unless-stopped
+    mem_limit: 640m
+    cpus: 0.75
+    environment:
+      DEPLOYMENT_VERSION: ${INTELLIGENCE_RELEASE_SHA:?Set the full release SHA}
+      AISCOPE_INTELLIGENCE_WORKER_MONITOR_ID: ${INTELLIGENCE_WORKER_MONITOR_ID:?Set the candidate worker monitor identity}
+    networks: [default]
+  migrate:
+    networks: [default]
+networks:
+  default:
+    external: true
+    name: geo-visibility-analyze_default

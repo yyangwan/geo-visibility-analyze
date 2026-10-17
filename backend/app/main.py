@@ -166,6 +166,7 @@ async def health():
         return {
             "status": "ok",
             "db": "connected",
+            "deploymentVersion": os.getenv("DEPLOYMENT_VERSION", "local"),
             "capabilities": ["product_website_idempotency_v1"],
         }
     except Exception:

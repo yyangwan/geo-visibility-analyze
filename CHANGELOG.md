@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0.1] - 2026-10-18
+
+### Added
+
+- Add an immutable-image production deployment workflow, isolated database guard, candidate-specific worker acceptance, and verified blue/green rollback.
+
+### Fixed
+
+- Disable development authentication in production and expose the exact deployment revision in health checks.
+
 ## [1.1.0.0] - 2026-10-17
 
 ### Added
