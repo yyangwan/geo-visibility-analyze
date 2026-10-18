@@ -136,7 +136,7 @@ class SamplingRequest(StrictFact):
         min_length=1, max_length=5
     )
     rounds: int = Field(default=1, ge=1, le=10)
-    surface: Literal["web", "app"] = "app"
+    surface: Literal["web", "app", "managed_v1"] = "app"
     conditions: CaptureConditions = Field(default_factory=CaptureConditions)
     idempotency_key: str = Field(alias="idempotencyKey", min_length=8, max_length=100)
 

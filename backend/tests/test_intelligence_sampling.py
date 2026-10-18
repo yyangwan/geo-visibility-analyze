@@ -41,6 +41,44 @@ async def new_audit(db, rounds=2):
     return audit, prompt, request
 
 
+@pytest.mark.asyncio
+async def test_managed_policy_covers_every_platform_and_records_actual_surface(
+    db_session,
+):
+    prompt = Prompt(project_id="p1", text="完整提示词")
+    db_session.add(prompt)
+    await db_session.commit()
+    request = SamplingRequest.model_validate(
+        {
+            "promptIds": [prompt.id],
+            "platforms": ["qwen", "deepseek", "doubao", "kimi", "hunyuan"],
+            "rounds": 2,
+            "surface": "managed_v1",
+            "idempotencyKey": "managed-policy-123",
+        }
+    )
+    audit, count = await create_sampling_audit(db_session, "p1", request, [])
+    await db_session.commit()
+    assert count == 10
+    samples = (await db_session.scalars(select(AuditSample))).all()
+    tasks = (await db_session.scalars(select(DeviceTask))).all()
+    assert len(samples) == len(tasks) == 10
+    for sample in samples:
+        expected = "web" if sample.platform == "qwen" else "app"
+        assert sample.surface == expected
+        task = next(t for t in tasks if t.payload["sample_id"] == sample.id)
+        assert task.surface == expected
+        assert task.task_type == (
+            "browser.prompt" if expected == "web" else "appium.prompt"
+        )
+        assert task.platform == (
+            "yuanbao" if sample.platform == "hunyuan" else sample.platform
+        )
+    again, repeated = await create_sampling_audit(db_session, "p1", request, [])
+    assert again.id == audit.id and repeated == count
+    assert len((await db_session.scalars(select(DeviceTask))).all()) == 10
+
+
 def result_for(task, text="云衡与未知品牌都出现", kind="unknown"):
     return {
         "contractVersion": 2,
