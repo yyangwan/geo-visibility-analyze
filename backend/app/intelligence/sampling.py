@@ -157,6 +157,14 @@ async def create_sampling_audit(
             db.add(version)
             await db.flush()
         for platform in request.platforms:
+            # Versioned service policy: Qwen uses the verified web compensation
+            # while its app adapter is incomplete. Persist the actual transport
+            # so capture validation and comparison never treat it as app data.
+            surface = (
+                ("web" if platform == "qwen" else "app")
+                if request.surface == "managed_v1"
+                else request.surface
+            )
             for sample_index in range(1, request.rounds + 1):
                 conditions = request.conditions.model_dump(by_alias=True)
                 sample = AuditSample(
@@ -164,10 +172,10 @@ async def create_sampling_audit(
                     audit_id=audit.id,
                     prompt_version_id=version.id,
                     platform=platform,
-                    surface=request.surface,
+                    surface=surface,
                     sample_index=sample_index,
                     conditions=conditions,
-                    condition_hash=stable_hash([request.surface, conditions]),
+                    condition_hash=stable_hash([surface, conditions]),
                 )
                 db.add(sample)
                 await db.flush()
