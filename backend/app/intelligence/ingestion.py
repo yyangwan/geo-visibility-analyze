@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.intelligence.answer_quality import is_status_only_answer
 from app.intelligence.models import (
     AnalysisJob,
     AuditSample,
@@ -33,7 +34,11 @@ KINDS = {
 
 
 async def prepare_run(
-    db: AsyncSession, project_id: str, audit_id: int, *, enrich: bool = True,
+    db: AsyncSession,
+    project_id: str,
+    audit_id: int,
+    *,
+    enrich: bool = True,
     retry_failed: bool = False,
 ) -> IntelligenceRun:
     # Serialize revisions with an existing project-owned audit row, not MAX alone.
@@ -159,7 +164,8 @@ async def prepare_run(
                 "prompt": prompt.text if prompt else "",
                 "prompt_hash": stable_hash(prompt.text if prompt else ""),
                 "text": response.response_text or "",
-                "error": bool(response.error),
+                "error": bool(response.error)
+                or is_status_only_answer(response.response_text or ""),
                 "observed_at": utc_isoformat(response.created_at),
                 "conditions": {
                     key: (response.request_params or {}).get(key)
@@ -223,7 +229,10 @@ async def prepare_run(
                     "prompt": version.text,
                     "prompt_hash": version.text_hash,
                     "text": response.text,
-                    "error": False,
+                    "error": is_status_only_answer(response.text),
+                    "quality_reason": "ui_status_only"
+                    if is_status_only_answer(response.text)
+                    else None,
                     "observed_at": utc_isoformat(response.observed_at),
                     "answer_status": payload["answer"]["status"],
                     "conditions": payload["conditions"],
@@ -389,7 +398,9 @@ async def prepare_run(
                 or jobs[0].subject_id != previous.id
                 or jobs[0].max_attempts < 1
             ):
-                raise HTTPException(409, "Failed analysis is not in a recoverable state")
+                raise HTTPException(
+                    409, "Failed analysis is not in a recoverable state"
+                )
             from app.intelligence.queue import db_now
 
             job = jobs[0]

@@ -6,7 +6,7 @@ from app.config import settings
 from app.intelligence.models import AnalysisJob, IntelligenceRun
 from app.intelligence.reporting import audit_report
 from app.models.models import Audit
-from app.utils.timezone import utc_isoformat
+from app.utils.timezone import utc_isoformat, utcnow
 
 
 async def project_dashboard(db, project_id):
@@ -17,6 +17,7 @@ async def project_dashboard(db, project_id):
         "latest_audit": None,
         "report": None,
         "processing": False,
+        "waiting": False,
     }
     if not settings.intelligence_enabled:
         return result
@@ -35,6 +36,7 @@ async def project_dashboard(db, project_id):
         for key, value in report.items()
         if key not in ("sources", "evidence", "responses", "source_states")
     }
+    processing = await audit_processing(db, audit)
     result.update(
         latest_audit={
             "id": str(audit.id),
@@ -44,17 +46,23 @@ async def project_dashboard(db, project_id):
             "platforms": audit.platforms_json or [],
         },
         report=overview,
-        processing=await audit_processing(db, audit),
+        processing=processing,
+        waiting=processing and not await audit_processing(db, audit, due_only=True),
     )
     return result
 
 
-async def audit_processing(db, audit):
+async def audit_processing(db, audit, *, due_only=False):
     project_id = audit.project_id
     active = await db.scalar(
         select(func.count(AnalysisJob.id)).where(
             AnalysisJob.project_id == project_id,
             AnalysisJob.status.in_(["queued", "leased", "retry_wait"]),
+            or_(
+                not due_only,
+                AnalysisJob.status == "leased",
+                AnalysisJob.available_at <= utcnow(),
+            ),
             or_(
                 AnalysisJob.run_id.in_(
                     select(IntelligenceRun.id).where(

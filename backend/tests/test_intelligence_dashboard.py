@@ -60,6 +60,17 @@ async def test_jobs_are_scoped_to_selected_audit_and_project(db_session, monkeyp
     job.status = "failed"
     await db_session.flush()
     assert (await project_dashboard(db_session, "p1"))["processing"] is False
+    from datetime import timedelta
+
+    from app.utils.timezone import utcnow
+
+    job.status, job.available_at = "queued", utcnow() + timedelta(hours=1)
+    await db_session.flush()
+    data = await project_dashboard(db_session, "p1")
+    assert data["processing"] is True and data["waiting"] is True
+    job.available_at = utcnow() - timedelta(seconds=1)
+    await db_session.flush()
+    assert (await project_dashboard(db_session, "p1"))["waiting"] is False
 
 
 @pytest.mark.asyncio

@@ -128,7 +128,12 @@ async def test_source_final_crash_exposes_failed_source_and_refresh(db_session):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kind,expected_calls",
-    [("answer_reference", 1), ("search_candidate", 0), ("unknown", 0)],
+    [
+        ("answer_reference", 1),
+        ("search_candidate", 0),
+        ("unknown", 0),
+        ("invalid_output", 1),
+    ],
 )
 async def test_claim_verification_only_uses_actual_same_answer_sources(
     db_session, monkeypatch, tmp_path, kind, expected_calls
@@ -144,7 +149,7 @@ async def test_claim_verification_only_uses_actual_same_answer_sources(
             {
                 "title": "规格说明",
                 "url": "https://example.com/article",
-                "kind": kind,
+                "kind": "answer_reference" if kind == "invalid_output" else kind,
                 "url_resolution": "exact",
             }
         ],
@@ -208,6 +213,11 @@ async def test_claim_verification_only_uses_actual_same_answer_sources(
 
     async def verify(answer, source, *_):
         calls.append((answer, source))
+        if kind == "invalid_output":
+            return {
+                "relation": "invented",
+                "source_quote": "private-invalid-model-output",
+            }
         return {"relation": "contradicts", "source_quote": "两年质保"}
 
     queue = JobQueue(TestSessionLocal, "worker")
@@ -217,6 +227,15 @@ async def test_claim_verification_only_uses_actual_same_answer_sources(
     rows = (await db_session.scalars(select(ClaimEvidence))).all()
     assert len(calls) == len(rows) == expected_calls
     if rows:
+        if kind == "invalid_output":
+            assert rows[0].relation == "unverified" and rows[0].source_quote == ""
+            assert rows[0].method == "model_output_invalid"
+            from app.intelligence.models import IntelligenceRun
+
+            run = await db_session.scalar(select(IntelligenceRun))
+            assert run.status == "partial"
+            assert run.coverage["evidence_alignment"]["invalid_pairs"] == 1
+            return
         assert (
             rows[0].relation == "contradicts" and rows[0].review_state == "needs_review"
         )

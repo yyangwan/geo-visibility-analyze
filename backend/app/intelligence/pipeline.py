@@ -3,6 +3,7 @@
 import gzip
 from collections import Counter, defaultdict
 
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import settings
@@ -22,9 +23,11 @@ from app.intelligence.models import (
 from app.intelligence.queue import JobQueue, Lease
 from app.intelligence.semantics import (
     SEGMENT_VERSION,
+    SemanticOutputError,
     analysis_signature,
     analyze_text,
     chunks,
+    safe_validation_fields,
     stable_hash,
 )
 from app.intelligence.sources import SourceBlocked, SourceUnavailable, capture_source
@@ -317,7 +320,11 @@ class Pipeline:
                             SegmentAnalysis.segment_id == segment.id,
                         )
                     )
-                    if application and application.status in ("completed", "partial"):
+                    if application and application.status in (
+                        "completed",
+                        "partial",
+                        "failed",
+                    ):
                         continue
                     cache = await db.scalar(
                         select(SemanticCache).where(
@@ -326,23 +333,53 @@ class Pipeline:
                             SemanticCache.signature == signature,
                         )
                     )
-                result, usage, status = None, {}, "deferred"
+                result, usage, status, diagnostic = None, {}, "deferred", None
                 if cache:
                     result, usage, status = cache.result, cache.usage, "completed"
                     status = "partial" if result.get("rejected_spans") else "completed"
                 elif api_key:
                     allowed = await self.reserve_model_request(lease)
                     if allowed:
-                        result, usage = await self.analyze(
-                            segment.text, api_key, base_url, model
-                        )
-                        status = (
-                            "partial" if result.get("rejected_spans") else "completed"
-                        )
+                        try:
+                            result, usage = await self.analyze(
+                                segment.text, api_key, base_url, model
+                            )
+                            status = (
+                                "partial"
+                                if result.get("rejected_spans")
+                                else "completed"
+                            )
+                        except (SemanticOutputError, ValidationError) as error:
+                            status = "failed"
+                            diagnostic = {
+                                "segment_id": segment.id,
+                                "code": "semantic_output_invalid",
+                                "fields": error.fields
+                                if isinstance(error, SemanticOutputError)
+                                else safe_validation_fields(error),
+                            }
 
                 async def apply(
-                    db, segment=segment, result=result, usage=usage, status=status
+                    db,
+                    segment=segment,
+                    result=result,
+                    usage=usage,
+                    status=status,
+                    diagnostic=diagnostic,
                 ):
+                    if diagnostic:
+                        from app.intelligence.models import AnalysisJob
+
+                        job = await db.get(AnalysisJob, lease.id)
+                        previous = job.payload.get("semantic_errors", [])
+                        job.payload = {
+                            **job.payload,
+                            "semantic_error_count": job.payload.get(
+                                "semantic_error_count", 0
+                            )
+                            + 1,
+                            "semantic_errors": [*previous, diagnostic][:20],
+                        }
                     cache = None
                     if result is not None:
                         cache = await db.scalar(
@@ -439,9 +476,18 @@ class Pipeline:
             from app.intelligence.actions import persist_diagnoses
 
             await persist_diagnoses(db, current, summary)
+            from app.intelligence.models import AnalysisJob
+
+            job = await db.get(AnalysisJob, lease.id)
+            coverage["semantic_errors"] = job.payload.get("semantic_errors", [])
+            coverage["semantic_error_count"] = job.payload.get(
+                "semantic_error_count", 0
+            )
             coverage["evidence_alignment"] = alignment
             coverage["complete"] = (
-                coverage["complete"] and not alignment["deferred_pairs"]
+                coverage["complete"]
+                and not alignment["deferred_pairs"]
+                and not alignment["invalid_pairs"]
             )
             current.coverage, current.summary = coverage, summary
             current.status = "ready" if coverage["complete"] else "partial"
@@ -579,6 +625,7 @@ async def build_summary(db, run):
         row["registered_roles"].update(roles[resolved_name.casefold()])
         if manifest.get("brand_context") is not None:
             from app.intelligence.project_context import bound_roles
+
             row["registered_roles"] = bound_roles(manifest, resolved_id)
         row["role"] = (
             next(iter(row["registered_roles"]))

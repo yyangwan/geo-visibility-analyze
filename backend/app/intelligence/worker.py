@@ -67,6 +67,10 @@ async def main():
         raise RuntimeError("Storage configuration verification failed") from None
     queue = JobQueue(async_session, f"{socket.gethostname()}-{uuid4().hex[:8]}")
     pipeline = Pipeline(queue, blobs)
+    from app.intelligence.refresh import recover_settled_refreshes
+
+    async with async_session() as db, db.begin():
+        await recover_settled_refreshes(db)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for name in (signal.SIGINT, signal.SIGTERM):
