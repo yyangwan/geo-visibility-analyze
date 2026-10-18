@@ -21,6 +21,7 @@ from app.intelligence.models import (
     ContentSegment,
     IntelligenceRun,
     SamplingAudit,
+    SourceFetch,
 )
 from app.intelligence.sampling import create_sampling_audit
 from app.utils.timezone import utc_isoformat, utcnow
@@ -818,8 +819,65 @@ async def capture_status(
             AnalysisJob.status.in_(["queued", "leased", "retry_wait"]),
         )
     )
+    latest_run = await db.scalar(
+        select(IntelligenceRun)
+        .where(
+            IntelligenceRun.project_id == audit.project_id,
+            IntelligenceRun.audit_id == audit_id,
+        )
+        .order_by(IntelligenceRun.revision.desc())
+        .limit(1)
+    )
+    refresh_job = (
+        await db.get(AnalysisJob, state.pending_job_id)
+        if state and state.pending_job_id
+        else None
+    )
+    now = utcnow()
+    refresh_waiting = bool(
+        refresh_job
+        and refresh_job.status in ("queued", "retry_wait")
+        and refresh_job.available_at > now
+    )
+    source_failures = await db.scalar(
+        select(func.count(func.distinct(SourceFetch.document_id))).where(
+            SourceFetch.project_id == audit.project_id,
+            SourceFetch.audit_id == audit_id,
+            SourceFetch.snapshot_id.is_(None),
+            SourceFetch.document_id.not_in(
+                select(SourceFetch.document_id).where(
+                    SourceFetch.project_id == audit.project_id,
+                    SourceFetch.audit_id == audit_id,
+                    SourceFetch.snapshot_id.is_not(None),
+                )
+            ),
+        )
+    )
+    unresolved = await db.scalar(
+        select(func.count(CitationObservation.id)).where(
+            CitationObservation.project_id == audit.project_id,
+            CitationObservation.audit_id == audit_id,
+            CitationObservation.url_resolution != "exact",
+        )
+    )
     return {
         "audit_id": str(audit_id),
+        "analysis_status": latest_run.status if latest_run else None,
+        "semantic_error_count": (latest_run.coverage or {}).get(
+            "semantic_error_count", 0
+        )
+        if latest_run
+        else 0,
+        "source_failed_documents": source_failures or 0,
+        "source_unresolved": unresolved or 0,
+        "refresh_waiting": refresh_waiting,
+        "refresh_status": refresh_job.status if refresh_job else None,
+        "refresh_available_at": utc_isoformat(refresh_job.available_at)
+        if refresh_waiting
+        else None,
+        "refresh_wait_reason": refresh_job.payload.get("waiting_reason")
+        if refresh_waiting
+        else None,
         "analysis_pending": analysis_pending or 0,
         "source_pending": source_pending or 0,
         "status": audit.status.value,

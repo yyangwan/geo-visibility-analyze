@@ -1,7 +1,7 @@
 """Atomic device binding, immutable attempts and explicit independent sampling."""
 
 import secrets
-from datetime import UTC
+from datetime import UTC, timedelta
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -23,7 +23,7 @@ from app.models.models import Audit, AuditStage, Prompt, QueryStatus
 from app.utils.timezone import utcnow
 
 
-async def dispatch_attempt(db, sample, attempt_no):
+async def dispatch_attempt(db, sample, attempt_no, *, retry_after_seconds=0):
     existing = await db.scalar(
         select(CaptureAttempt).where(
             CaptureAttempt.project_id == sample.project_id,
@@ -56,7 +56,8 @@ async def dispatch_attempt(db, sample, attempt_no):
         priority=settings.mobile_app_capture_priority,
         max_attempts=1,
         status="pending",
-        available_at=utcnow(),
+        available_at=utcnow()
+        + timedelta(seconds=max(0, min(retry_after_seconds, 3600))),
         idempotency_key=f"capture-v2:{sample.id}:{attempt_no}",
     )
     attempt = CaptureAttempt(
@@ -293,7 +294,7 @@ async def accept_capture(db, task, lease_token: str, result: dict):
         raise HTTPException(409, "Capture lease expired while accepting facts")
 
 
-async def capture_failed(db, task, code, *, retryable=True):
+async def capture_failed(db, task, code, *, retryable=True, retry_after_seconds=30):
     attempt = await db.scalar(
         select(CaptureAttempt)
         .where(CaptureAttempt.device_task_id == task.id)
@@ -319,7 +320,12 @@ async def capture_failed(db, task, code, *, retryable=True):
         )
     )
     if retryable and config and attempt.attempt_no < config.max_attempts:
-        await dispatch_attempt(db, sample, attempt.attempt_no + 1)
+        await dispatch_attempt(
+            db,
+            sample,
+            attempt.attempt_no + 1,
+            retry_after_seconds=max(30, retry_after_seconds),
+        )
     else:
         sample.status = "failed"
         await synchronize_capture_state(db, sample.project_id, sample.audit_id)
@@ -329,6 +335,33 @@ async def capture_failed(db, task, code, *, retryable=True):
 
 
 async def reconcile_capture_failures(db):
+    # Resource waits must also terminate if the gateway stops polling afterwards.
+    waiting = (
+        await db.scalars(
+            select(DeviceTask)
+            .join(CaptureAttempt, CaptureAttempt.device_task_id == DeviceTask.id)
+            .where(
+                CaptureAttempt.status == "pending",
+                CaptureAttempt.project_id == DeviceTask.project_id,
+                DeviceTask.status == "pending",
+                DeviceTask.error_code == "gateway_device_unavailable",
+                DeviceTask.created_at
+                <= utcnow()
+                - timedelta(
+                    seconds=max(300, settings.mobile_app_capture_task_timeout_seconds)
+                ),
+            )
+            .with_for_update()
+            .limit(100)
+        )
+    ).all()
+    for task in waiting:
+        task.status, task.error_code, task.completed_at = (
+            "failed",
+            "gateway_device_wait_timeout",
+            utcnow(),
+        )
+        await capture_failed(db, task, task.error_code, retryable=False)
     expired = (
         await db.scalars(
             select(DeviceTask)

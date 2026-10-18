@@ -4,9 +4,9 @@ import hashlib
 import json
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PIPELINE_VERSION = "citation-intelligence-10"
+PIPELINE_VERSION = "citation-intelligence-11"
 SEGMENT_VERSION = "unicode-nonoverlap-1"
 
 
@@ -67,6 +67,54 @@ class SemanticResult(BaseModel):
     topics: list[str] = Field(default_factory=list, max_length=50)
 
 
+class SemanticOutputError(ValueError):
+    """Safe diagnostics only: no provider content, quote text or validation input."""
+
+    def __init__(self, fields):
+        super().__init__("Model output did not satisfy the evidence schema")
+        self.fields = fields[:12]
+
+
+def safe_validation_fields(error):
+    allowed = {
+        "entities",
+        "claims",
+        "topics",
+        "name",
+        "kind",
+        "quote",
+        "start",
+        "end",
+        "sentiment",
+        "attributes",
+        "subject",
+        "topic",
+    }
+    return [
+        {
+            "path": [
+                part if isinstance(part, int) or part in allowed else "field"
+                for part in item["loc"]
+            ],
+            "type": item["type"],
+        }
+        for item in error.errors(include_input=False, include_url=False)[:12]
+    ]
+
+
+def decode_semantic(text, content):
+    # Accept one unambiguous JSON fence; do not extract guessed substrings.
+    try:
+        value = content.strip()
+        if value.startswith("```json\n") and value.endswith("\n```"):
+            value = value[8:-4].strip()
+        return checked_result(text, json.loads(value))
+    except ValidationError as error:
+        raise SemanticOutputError(safe_validation_fields(error)) from None
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        raise SemanticOutputError([{"path": [], "type": "invalid_json"}]) from None
+
+
 def checked_result(text: str, value: dict) -> dict:
     result = SemanticResult.model_validate(value).model_dump()
     rejected = 0
@@ -96,7 +144,7 @@ SYSTEM = """分析给定文本中的所有信息，包括未登记品牌、组�
 claims:[{quote,start,end,subject,topic}], topics:[字符串]。
 kind只能是brand/organization/product/person/other；sentiment为positive/neutral/negative/unknown。
 quote必须原文逐字片段，name必须出现在quote，start/end是Python Unicode字符位置，end不含边界。
-没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。"""
+entities/claims/topics 必须为数组；start/end 必须为整数。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。\n没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。"""
 
 
 def analysis_signature(model: str, base_url: str) -> str:
@@ -139,7 +187,7 @@ async def analyze_text(
         response.raise_for_status()
         payload = response.json()
     content = payload["choices"][0]["message"]["content"]
-    return checked_result(text, json.loads(content)), {
+    return decode_semantic(text, content), {
         key: int(payload.get("usage", {}).get(key, 0))
         for key in ("prompt_tokens", "completion_tokens")
     }

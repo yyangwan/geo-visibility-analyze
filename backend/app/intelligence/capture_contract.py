@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.intelligence.answer_quality import is_status_only_answer
 from app.intelligence.blob import digest
 
 
@@ -35,6 +36,8 @@ class Answer(StrictFact):
 
     @model_validator(mode="after")
     def correct_hash(self):
+        if is_status_only_answer(self.text):
+            raise ValueError("Answer contains only a UI progress label")
         if digest(self.text.encode("utf-8")) != self.content_hash:
             raise ValueError("Answer hash differs from actual UTF-8 bytes")
         return self

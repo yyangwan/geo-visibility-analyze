@@ -234,17 +234,35 @@ async def fail_task(
     task.lease_owner = None
     task.lease_token_hash = None
     task.lease_expires_at = None
-    if retryable and task.attempt_count < task.max_attempts:
+    resource_wait = error_code == "gateway_device_unavailable"
+    if resource_wait and (utcnow() - task.created_at).total_seconds() >= max(
+        300, settings.mobile_app_capture_task_timeout_seconds
+    ):
+        resource_wait = False
+        retryable = False
+        task.error_code = error_code = "gateway_device_wait_timeout"
+    if retryable and (resource_wait or task.attempt_count < task.max_attempts):
         task.status = "pending"
         task.gateway_id = None
-        task.available_at = utcnow() + timedelta(seconds=retry_after_seconds)
+        # A task that never reached an Android device did not consume a capture.
+        if resource_wait:
+            task.attempt_count = max(0, task.attempt_count - 1)
+        task.available_at = utcnow() + timedelta(
+            seconds=max(30, retry_after_seconds) if resource_wait else retry_after_seconds
+        )
     else:
         task.status = "failed"
         task.completed_at = utcnow()
     if task.payload.get("capture_contract_version") == 2 and task.status == "failed":
         from app.intelligence.sampling import capture_failed
 
-        await capture_failed(db, task, error_code, retryable=retryable)
+        await capture_failed(
+            db,
+            task,
+            error_code,
+            retryable=retryable,
+            retry_after_seconds=retry_after_seconds,
+        )
     await db.commit()
     await db.refresh(task)
     return task
