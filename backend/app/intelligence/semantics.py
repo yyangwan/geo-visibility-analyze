@@ -6,7 +6,7 @@ import json
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PIPELINE_VERSION = "citation-intelligence-11"
+PIPELINE_VERSION = "citation-intelligence-12"
 SEGMENT_VERSION = "unicode-nonoverlap-1"
 
 
@@ -144,7 +144,12 @@ SYSTEM = """分析给定文本中的所有信息，包括未登记品牌、组�
 claims:[{quote,start,end,subject,topic}], topics:[字符串]。
 kind只能是brand/organization/product/person/other；sentiment为positive/neutral/negative/unknown。
 quote必须原文逐字片段，name必须出现在quote，start/end是Python Unicode字符位置，end不含边界。
-entities/claims/topics 必须为数组；start/end 必须为整数。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。\n没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。"""
+entities/claims/topics 必须为数组；start/end 必须为整数。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。
+每个实体的 attributes 必须是字符串数组（例如 ["价格低", "容量600毫升"]），没有属性用 []。
+attributes 禁止使用对象、键值字典、字符串或 null；topics 的每一项也只能是字符串。
+严格遵循以下结构示例（示例值不是输入事实，不得抄入结果）：
+{"entities":[{"name":"示例品牌","kind":"brand","quote":"示例品牌","start":0,"end":4,"sentiment":"unknown","attributes":[]}],"claims":[{"quote":"示例观点","start":0,"end":4,"subject":"示例主体","topic":"示例主题"}],"topics":[]}
+没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。"""
 
 
 def analysis_signature(model: str, base_url: str) -> str:

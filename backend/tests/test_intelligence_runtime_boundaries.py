@@ -63,7 +63,7 @@ async def test_pipeline_failure_records_only_error_class(
         analyze_run=AsyncMock(side_effect=ValueError("private-source-body"))
     )
     await worker.execute(queue, pipeline, item)
-    queue.fail.assert_awaited_once_with(item, "ValueError")
+    queue.fail.assert_awaited_once_with(item, "ValueError", retry=True)
     assert "class=ValueError" in caplog.text
     assert (
         "private-source-body" not in caplog.text and "private-lease" not in caplog.text
