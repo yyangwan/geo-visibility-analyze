@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.config import settings
 from app.database import async_session
 from app.intelligence.blob import configured_store
+from app.intelligence.failures import classify_failure
 from app.intelligence.monitor import WorkerMonitor
 from app.intelligence.pipeline import Pipeline
 from app.intelligence.queue import JobQueue, LeaseLost
@@ -39,9 +40,24 @@ async def execute(queue, pipeline, lease):
         logger.warning("lease_lost job=%s", lease.id)
     except Exception as error:
         # Never log URLs, model response bodies, auth headers, or source text.
-        logger.error("job_error job=%s class=%s", lease.id, type(error).__name__)
+        failure = classify_failure(error)
+        logger.error(
+            "job_error job=%s class=%s status=%s classification=%s code=%s retryable=%s",
+            lease.id,
+            failure.exception_class,
+            failure.http_status,
+            failure.classification,
+            failure.code,
+            failure.retry,
+            extra={
+                "http_status": failure.http_status,
+                "failure_classification": failure.classification,
+                "error_code": failure.code,
+                "retryable": failure.retry,
+            },
+        )
         try:
-            await queue.fail(lease, type(error).__name__)
+            await queue.fail(lease, failure.code, retry=failure.retry)
         except LeaseLost:
             pass
     finally:
