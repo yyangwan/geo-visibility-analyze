@@ -384,6 +384,23 @@ class ClaimEvidence(Scoped, Base):
     review_state: Mapped[str] = mapped_column(String(24), default="needs_review")
 
 
+class EvaluationCohortReview(Scoped, Base):
+    __tablename__ = "intelligence_evaluation_reviews"
+    __table_args__ = (
+        UniqueConstraint("project_id", "audit_id", "version"),
+        UniqueConstraint("project_id", "idempotency_key"),
+    )
+    audit_id: Mapped[int] = mapped_column(Integer)
+    run_id: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer)
+    base_hash: Mapped[str] = mapped_column(String(64))
+    cohort: Mapped[dict] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text)
+    actor_id: Mapped[str] = mapped_column(String(200))
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))
+
+
 class SamplingAudit(Scoped, Base):
     __tablename__ = "intelligence_sampling_audits"
     __table_args__ = (

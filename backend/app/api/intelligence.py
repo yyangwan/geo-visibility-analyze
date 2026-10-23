@@ -622,11 +622,37 @@ async def approve_action_plan(
     return await plan_view(db, action, run)
 
 
+from app.intelligence.evaluation_reviews import (
+    CohortReviewRequest,
+    latest_cohort_review,
+    review_cohort,
+)
 from app.intelligence.identity import (
     IdentityDecision,
     decide_identity,
     identity_snapshot,
 )
+
+
+@router.get("/runs/{run_id}/evaluation-cohort")
+async def get_evaluation_cohort(run_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    run = await action_run(db, user, run_id)
+    latest = await latest_cohort_review(db, run.project_id, run.audit_id)
+    return {"base": run.manifest.get("evaluation_base_cohort") or run.manifest.get("evaluation_cohort"),
+            "cohort": run.manifest.get("evaluation_cohort"),
+            "latest_review_version": latest.version if latest else 0,
+            "applied_review": run.manifest.get("evaluation_review")}
+
+
+@router.post("/runs/{run_id}/evaluation-cohort/review", status_code=202)
+async def submit_evaluation_cohort(run_id: str, data: CohortReviewRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action_writer(user)
+    run = await action_run(db, user, run_id)
+    if run.status not in ("ready", "partial"):
+        raise HTTPException(409, "Wait for completed analysis")
+    event = await review_cohort(db, run, data, str(user["sub"]))
+    await db.commit()
+    return {"id": event.id, "version": event.version, "cohort_hash": event.cohort["hash"], "refresh_pending": True}
 
 
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)

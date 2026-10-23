@@ -102,7 +102,7 @@ async def test_unknown_job_kind_fails_without_starting_pipeline():
 
 
 @pytest.mark.parametrize(
-    "revision", [None, "old-schema", "intelligence_worker_20261016"]
+    "revision", [None, "old-schema", "intelligence_worker_20261016", "evaluation_reviews_20261022"]
 )
 def test_schema_startup_is_readonly_and_always_disposes(
     tmp_path, monkeypatch, revision
@@ -123,7 +123,7 @@ def test_schema_startup_is_readonly_and_always_disposes(
     monkeypatch.setattr(engine, "dispose", dispose)
     monkeypatch.setattr("sqlalchemy.create_engine", lambda _: engine)
     monkeypatch.setattr(main_module.settings, "database_url", url)
-    if revision == "intelligence_worker_20261016":
+    if revision == "evaluation_reviews_20261022":
         main_module._check_schema_revision()
     else:
         with pytest.raises(RuntimeError, match="Schema mismatch"):

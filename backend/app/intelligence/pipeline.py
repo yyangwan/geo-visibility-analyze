@@ -8,6 +8,8 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.intelligence.blob import digest
+from app.intelligence.brand_evaluation import summarize_answer_scores
+from app.intelligence.brand_signals import summarize_brand_signals
 from app.intelligence.evidence import align_claims, verify_pair
 from app.intelligence.models import (
     ContentSegment,
@@ -821,6 +823,7 @@ async def build_summary(db, run):
         )
         group["sample_count"] += 1
     summary = {
+        "brand_signals": summarize_brand_signals(applications, response_map, evidence),
         "entities": entities,
         "platforms": platform_rows,
         "mentions": evidence,
@@ -833,5 +836,11 @@ async def build_summary(db, run):
     }
     from app.intelligence.diagnosis import platform_diagnoses
 
+    summary["brand_evaluation"] = summarize_answer_scores(
+        manifest, applications, entities, evidence, summary["brand_signals"]
+    )
     summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
+    from app.intelligence.competitive_actions import competitive_diagnoses
+
+    summary["diagnoses"].extend(competitive_diagnoses(run, summary))
     return coverage, summary
