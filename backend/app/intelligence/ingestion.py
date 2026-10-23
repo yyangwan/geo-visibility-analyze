@@ -190,6 +190,7 @@ async def prepare_run(
         )
     )
     sample_statuses = {}
+    evaluation_samples = []
     if sampling:
         frozen_responses = []
         samples = (
@@ -204,6 +205,15 @@ async def prepare_run(
         ).all()
         sample_statuses = {sample.id: sample.status for sample in samples}
         for sample in samples:
+            version = await db.get(PromptVersion, sample.prompt_version_id)
+            if not version or version.project_id != project_id:
+                raise ValueError("Invalid project-scoped prompt binding")
+            evaluation_samples.append({
+                "sample_id": sample.id, "sample_index": sample.sample_index,
+                "platform": sample.platform, "prompt_hash": version.text_hash,
+                "prompt": version.text, "category": version.category,
+                "prompt_version_id": version.id,
+            })
             if sample.status != "sealed" or not sample.selected_response_id:
                 continue
             response = await db.get(CapturedResponse, sample.selected_response_id)
@@ -356,6 +366,25 @@ async def prepare_run(
         if sampling
         else len(frozen_responses),
     }
+    if sampling:
+        from app.intelligence.brand_evaluation import freeze_cohort
+
+        # Source capture/identity revisions must not change the planned denominator.
+        prior_manifest = await db.scalar(
+            select(IntelligenceRun.manifest).where(
+                IntelligenceRun.project_id == project_id,
+                IntelligenceRun.audit_id == audit_id,
+            ).order_by(IntelligenceRun.revision.desc()).limit(1)
+        )
+        manifest["evaluation_base_cohort"] = (
+            (prior_manifest.get("evaluation_base_cohort") or prior_manifest.get("evaluation_cohort")) if prior_manifest else None
+        ) or freeze_cohort(evaluation_samples, audit.brands_json or [])
+        from app.intelligence.evaluation_reviews import latest_cohort_review
+
+        review = await latest_cohort_review(db, project_id, audit_id)
+        base = manifest["evaluation_base_cohort"]
+        manifest["evaluation_cohort"] = review.cohort if review and review.base_hash == base["hash"] else base
+        manifest["evaluation_review"] = {"id": review.id, "version": review.version} if review and review.base_hash == base["hash"] else None
     _, base_url, model = settings.get_analysis_llm_config()
     signature, input_hash = analysis_signature(model, base_url), stable_hash(manifest)
     previous = await db.scalar(

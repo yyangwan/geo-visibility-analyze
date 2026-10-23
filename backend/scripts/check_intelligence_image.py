@@ -27,7 +27,7 @@ async def main():
     assert not (root / ".keys").exists(), "Signing keys leaked into image"
     config = Config(str(root / "alembic.ini"))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["intelligence_worker_20261016"], "Unexpected migration head"
+    assert heads == ["evaluation_reviews_20261022"], "Unexpected migration head"
     with tempfile.TemporaryDirectory(prefix="intelligence-image-") as temporary:
         probe = await check_storage(
             LocalBlobStore(Path(temporary)), backend="local", write_probe=True
