@@ -32,6 +32,7 @@ def payload(attributes):
         "claims": [],
         "topics": [],
         "brand_signals": [],
+        "information_units": [],
     }
 
 
@@ -59,7 +60,7 @@ def test_missing_extraction_arrays_are_not_a_checked_negative_sample(value):
         decode_semantic("有实际文本", json.dumps(value))
 
 
-@pytest.mark.parametrize("field", ["entities", "claims", "topics", "brand_signals"])
+@pytest.mark.parametrize("field", ["entities", "claims", "topics", "brand_signals", "information_units"])
 def test_explicit_null_does_not_count_as_a_checked_empty_array(field):
     value = payload([])
     value[field] = None
@@ -120,7 +121,7 @@ async def test_insufficient_balance_stops_retry_and_keeps_raw_inputs(
     await execute(queue, Pipeline(queue, None, analyze=unavailable), lease)
     await db_session.refresh(run)
     job = await db_session.get(AnalysisJob, lease.id)
-    assert calls == [text[:3500]]
+    assert calls == [text[:900]]
     assert job.status == "failed" and job.attempt == 1
     assert job.error_code == "analysis_provider_insufficient_balance"
     assert run.status == "failed"

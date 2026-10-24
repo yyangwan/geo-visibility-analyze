@@ -210,6 +210,9 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
         for entity in entities:
             if entity["kind"] not in ("brand", "organization", "product"):
                 continue
+            if (entity.get("role", "unregistered") == "unregistered"
+                and entity.get("comparison_context_status") == "not_solution"):
+                continue
             observed = [
                 item
                 for item in signals["observations"]
@@ -222,6 +225,12 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
             identity_ok = (
                 entity["identity_status"] == "confirmed"
                 and not entity.get("role_conflict")
+                and not (entity.get("role", "unregistered") == "unregistered"
+                         and entity.get("comparison_context_status") == "unknown")
+                and not (entity.get("role", "unregistered") == "unregistered"
+                         and "answer_context_roles" in entity
+                         and presence
+                         and "evaluated_solution" not in entity["answer_context_roles"].get(response["id"], []))
                 and not any(
                     item["identity_ambiguity"]
                     for item in answer_mentions
@@ -282,6 +291,9 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
     if cohort:
         for entity in entities:
             if entity["kind"] not in ("brand", "organization", "product"):
+                continue
+            if (entity.get("role", "unregistered") == "unregistered"
+                and entity.get("comparison_context_status") == "not_solution"):
                 continue
             entity_rows = [row for row in rows if row["entity_id"] == entity["id"]]
             by_sample = defaultdict(list)

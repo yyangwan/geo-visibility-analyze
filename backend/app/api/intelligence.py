@@ -672,6 +672,36 @@ async def get_run_scenarios(run_id: str, user: dict = Depends(get_current_user),
     return scenario_projection(run.manifest, view(run)["summary"]["brand_presence"])
 
 
+@router.get("/runs/{run_id}/information-units")
+async def get_information_units(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    owner_kind: str | None = Query(None, pattern=r"^(answer|citation|snapshot)$"),
+    owner_id: str | None = Query(None, max_length=64),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("information_units", {})
+    rows = [row for row in projection.get("observations", [])
+            if (owner_kind is None or row["owner_kind"] == owner_kind)
+            and (owner_id is None or row["owner_id"] == owner_id)]
+    return {"version": projection.get("version"), "status": projection.get("status", "pending"),
+            "total": len(rows), "items": rows[offset:offset + limit],
+            "next_offset": offset + limit if offset + limit < len(rows) else None}
+
+
+@router.get("/runs/{run_id}/context-analyses")
+async def get_context_analyses(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("context_analysis", {})
+    rows = projection.get("observations", [])
+    return {**{key: value for key, value in projection.items() if key != "observations"},
+            "total": len(rows), "items": rows[offset:offset + limit],
+            "next_offset": offset + limit if offset + limit < len(rows) else None}
+
+
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
 async def review_identity(
     run_id: str,

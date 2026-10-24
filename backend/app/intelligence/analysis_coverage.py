@@ -72,6 +72,8 @@ def answer_coverage(manifest, applications):
 def related_span_defects(proof, names):
     aliases = {name.casefold() for name in names if isinstance(name, str) and name}
     for item in proof.get("rejected_items", []):
+        if item.get("path", [None])[0] == "information_units":
+            continue  # Unit qualification defects cannot invent entity-name ambiguity.
         candidate = item["candidate"]
         subject = candidate.get("name") or candidate.get("subject")
         if not isinstance(subject, str) or not subject:

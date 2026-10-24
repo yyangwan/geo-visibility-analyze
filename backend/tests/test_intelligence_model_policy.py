@@ -91,7 +91,7 @@ async def test_both_extraction_and_verification_use_the_bounded_non_thinking_pro
         async def post(self, url, **kwargs):
             requests.append(kwargs["json"])
             content = (
-                {"entities": [], "claims": [], "topics": [], "brand_signals": []}
+                {"entities": [], "claims": [], "topics": [], "brand_signals": [], "information_units": []}
                 if len(requests) == 1
                 else {"relation": "supports", "source_quote": "来源"}
             )

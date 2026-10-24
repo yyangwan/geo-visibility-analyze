@@ -105,6 +105,8 @@ def competitive_breakdown(cohort, rows, entities):
         entity["id"]: entity
         for entity in entities
         if entity["kind"] in ("brand", "organization", "product")
+        and not (entity.get("role", "unregistered") == "unregistered"
+                 and entity.get("comparison_context_status") == "not_solution")
     }
     index = defaultdict(list)
     for row in rows:

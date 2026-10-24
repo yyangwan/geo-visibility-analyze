@@ -51,6 +51,7 @@ def test_invalid_model_output_has_only_safe_field_diagnostics():
                     "claims": [],
                     "topics": [],
                     "brand_signals": [],
+                    "information_units": [],
                 }
             ),
         )
@@ -63,7 +64,7 @@ def test_invalid_model_output_has_only_safe_field_diagnostics():
     assert (
         decode_semantic(
             "原文",
-            '```json\n{"entities": [], "claims": [], "topics": [], "brand_signals": []}\n```',
+            '```json\n{"entities": [], "claims": [], "topics": [], "brand_signals": [], "information_units": []}\n```',
         )["entities"]
         == []
     )
@@ -74,7 +75,7 @@ async def test_one_invalid_segment_does_not_abort_other_segments(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(settings, "analysis_llm_api_key", "fake")
-    text = "甲" * 3500 + "后续有效文本"
+    text = "甲" * 900 + "后续有效文本"
     audit = await fixture_audit(db_session, text=text)
     run = await prepare_run(db_session, "p1", audit.id)
     await db_session.commit()

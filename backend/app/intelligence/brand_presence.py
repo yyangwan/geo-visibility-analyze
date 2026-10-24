@@ -124,6 +124,9 @@ def build_brand_presence(
         targets.append(target)
     for entity_id, entity in sorted(entity_index.items()):
         if entity_id not in consumed:
+            if (entity.get("role", "unregistered") == "unregistered"
+                and entity.get("comparison_context_status") == "not_solution"):
+                continue  # Retained in all-subject/units views, not a competing solution.
             targets.append(
                 {
                     "target_id": "entity:" + entity_id,
@@ -142,10 +145,14 @@ def build_brand_presence(
                         }
                     ),
                     "role": entity.get("role", "unregistered"),
-                    "identity_status": "ambiguous"
+                    "identity_status": "pending"
+                    if entity.get("role", "unregistered") == "unregistered"
+                    and entity.get("comparison_context_status") == "unknown"
+                    else "ambiguous"
                     if entity.get("role_conflict")
                     else entity.get("identity_status", "provisional"),
-                    "reason_codes": [],
+                    "reason_codes": ["solution_context_unresolved"]
+                    if entity.get("comparison_context_status") == "unknown" else [],
                 }
             )
     from app.intelligence.analysis_coverage import answer_coverage, related_span_defects

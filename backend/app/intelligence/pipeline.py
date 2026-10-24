@@ -11,6 +11,7 @@ from app.intelligence.analysis_coverage import segment_processed
 from app.intelligence.blob import digest
 from app.intelligence.brand_evaluation import summarize_answer_scores
 from app.intelligence.brand_signals import summarize_brand_signals
+from app.intelligence.contextual_analysis import analyze_context
 from app.intelligence.evidence import align_claims, verify_pair
 from app.intelligence.model_budget import (
     budget_status,
@@ -39,6 +40,7 @@ from app.intelligence.semantics import (
     analysis_signature,
     analyze_text,
     chunks,
+    extraction_signature,
     safe_validation_fields,
     stable_hash,
 )
@@ -56,6 +58,7 @@ class Pipeline:
         capture=capture_source,
         analyze=analyze_text,
         verify=verify_pair,
+        contextualize=analyze_context,
     ):
         self.queue, self.blobs, self.capture, self.analyze = (
             queue,
@@ -64,6 +67,7 @@ class Pipeline:
             analyze,
         )
         self.verify = verify
+        self.contextualize = contextualize
 
     async def reserve_model_request(
         self, lease, *, phase, messages, max_output, subject_id
@@ -306,6 +310,7 @@ class Pipeline:
         api_key, base_url, model = settings.get_analysis_llm_config()
         if analysis_signature(model, base_url) != signature:
             raise ValueError("Analysis configuration changed; create a new run")
+        text_signature = extraction_signature(model, base_url)
         owners = [
             ("answer", item["id"], item["text"])
             for item in manifest["responses"]
@@ -418,7 +423,7 @@ class Pipeline:
                         select(SemanticCache).where(
                             SemanticCache.project_id == lease.project_id,
                             SemanticCache.segment_hash == segment.segment_hash,
-                            SemanticCache.signature == signature,
+                            SemanticCache.signature == text_signature,
                         )
                     )
                 result, usage, status, diagnostic = None, {}, "deferred", None
@@ -518,14 +523,14 @@ class Pipeline:
                             select(SemanticCache).where(
                                 SemanticCache.project_id == lease.project_id,
                                 SemanticCache.segment_hash == segment.segment_hash,
-                                SemanticCache.signature == signature,
+                                SemanticCache.signature == text_signature,
                             )
                         )
                         if cache is None:
                             cache = SemanticCache(
                                 project_id=lease.project_id,
                                 segment_hash=segment.segment_hash,
-                                signature=signature,
+                                signature=text_signature,
                                 result=result,
                                 usage=usage,
                             )
@@ -600,6 +605,9 @@ class Pipeline:
 
                 await self.queue.checkpoint(lease, apply)
 
+        from app.intelligence.context_runtime import analyze_run_contexts
+
+        await analyze_run_contexts(self, lease, manifest, api_key, base_url, model)
         alignment = await align_claims(self, lease, manifest, api_key, base_url, model)
 
         async def publish(db):
@@ -626,6 +634,7 @@ class Pipeline:
             coverage["evidence_alignment"] = alignment
             coverage["complete"] = (
                 coverage["complete"]
+                and summary["context_analysis"]["status"] == "processed"
                 and not alignment["deferred_pairs"]
                 and not alignment["invalid_pairs"]
             )
@@ -641,6 +650,10 @@ class Pipeline:
 
 async def build_summary(db, run):
     manifest = run.manifest
+    from app.intelligence.context_runtime import context_projection
+    from app.intelligence.information_units import project_units
+
+    context_analysis = await context_projection(db, run)
     applications = (
         await db.execute(
             select(SegmentAnalysis, ContentSegment, SemanticCache)
@@ -835,6 +848,9 @@ async def build_summary(db, run):
         }
         for row in entity_rows.values()
     ]
+    from app.intelligence.context_runtime import annotate_subjects
+
+    annotate_subjects(entities, evidence, context_analysis)
     total_chars = sum(len(segment.text) for _, segment, _ in applications)
     analyzed_chars = sum(
         len(segment.text)
@@ -890,6 +906,9 @@ async def build_summary(db, run):
     coverage["article_completeness"] = (
         "unknown" if coverage["captured_sources"] else "unavailable"
     )
+    coverage["context_analysis"] = {
+        key: value for key, value in context_analysis.items() if key != "observations"
+    }
     coverage["complete"] = (
         coverage["complete"]
         and not manifest["sources"]
@@ -979,7 +998,9 @@ async def build_summary(db, run):
         )
         group["sample_count"] += 1
     summary = {
-        "brand_signals": summarize_brand_signals(applications, response_map, evidence),
+        "brand_signals": summarize_brand_signals(applications, response_map, evidence, context_analysis),
+        "information_units": project_units(applications),
+        "context_analysis": context_analysis,
         "entities": entities,
         "platforms": platform_rows,
         "mentions": evidence,

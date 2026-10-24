@@ -292,7 +292,7 @@ async def test_unconfigured_model_reports_deferred_not_fake_analysis(
     assert result.status == "partial"
     assert result.coverage["total_characters"] == 8000
     assert result.coverage["analyzed_characters"] == 0
-    assert result.coverage["segment_states"]["deferred"] == 3
+    assert result.coverage["segment_states"]["deferred"] == 9
 
 
 @pytest.mark.asyncio

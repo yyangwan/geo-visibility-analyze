@@ -7,8 +7,10 @@ from typing import Annotated, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-PIPELINE_VERSION = "citation-intelligence-21"
-SEGMENT_VERSION = "unicode-nonoverlap-1"
+from app.intelligence.information_units import InformationUnit, grounded_fields
+
+PIPELINE_VERSION = "citation-intelligence-22"
+SEGMENT_VERSION = "unicode-nonoverlap-2-900"
 
 
 def stable_hash(value) -> str:
@@ -19,7 +21,7 @@ def stable_hash(value) -> str:
     ).hexdigest()
 
 
-def chunks(text: str, size: int = 3500) -> list[dict]:
+def chunks(text: str, size: int = 900) -> list[dict]:
     if size < 100:
         raise ValueError("Chunk size too small")
     result, offset = [], 0
@@ -27,6 +29,8 @@ def chunks(text: str, size: int = 3500) -> list[dict]:
         end = min(offset + size, len(text))
         if end < len(text):
             boundary = text.rfind("\n", offset + size // 2, end)
+            if boundary < 0:
+                boundary = max(text.rfind(mark, offset + size // 2, end) for mark in "。！？；.!?;")
             if boundary >= 0:
                 end = boundary + 1
         result.append(
@@ -87,6 +91,7 @@ class SemanticResult(BaseModel):
     brand_signals: list[BrandSignalCandidate] | None = Field(
         default=None, max_length=300
     )
+    information_units: list[InformationUnit] | None = Field(default=None, max_length=100)
 
 
 class SemanticOutputError(ValueError):
@@ -130,6 +135,7 @@ def safe_validation_fields(error):
         "recommendation",
         "explicit_rank",
         "reason_level",
+        "information_units", "value", "unit", "conditions", "effective_time",
     }
     return [
         {
@@ -152,7 +158,7 @@ def decode_semantic(text, content):
         value = json.loads(value)
         if not isinstance(value, dict):
             raise SemanticOutputError([{"path": [], "type": "object_required"}])
-        required = ("entities", "claims", "topics", "brand_signals")
+        required = ("entities", "claims", "topics", "brand_signals", "information_units")
         missing = [key for key in required if key not in value]
         if missing:
             raise SemanticOutputError(
@@ -179,6 +185,11 @@ def decode_semantic(text, content):
                             "code": "string_to_singleton",
                         }
                     )
+        for index, unit in enumerate(value.get("information_units", [])):
+            if isinstance(unit, dict) and isinstance(unit.get("conditions"), str) and unit["conditions"]:
+                unit["conditions"] = [unit["conditions"]]
+                repairs.append({"path": ["information_units", index, "conditions"],
+                                "code": "string_to_singleton"})
         result = checked_result(text, value)
         result["schema_repairs"] = repairs
         return result
@@ -194,7 +205,7 @@ def checked_result(text: str, value: dict) -> dict:
     result = SemanticResult.model_validate(value).model_dump()
     rejected = 0
     rejected_items, repairs = [], []
-    for kind in ("entities", "claims", "brand_signals"):
+    for kind in ("entities", "claims", "brand_signals", "information_units"):
         if result[kind] is None:
             continue
         accepted = []
@@ -218,6 +229,11 @@ def checked_result(text: str, value: dict) -> dict:
                     continue
                 item["start"], item["end"] = first, first + len(quote)
                 repaired = True
+            if kind == "information_units" and not grounded_fields(item):
+                rejected += 1
+                rejected_items.append({"path": [kind, index],
+                                       "code": "unit_fields_not_in_quote", "candidate": item})
+                continue
             if kind in ("entities", "brand_signals") and item["name"] not in quote:
                 rejected += 1
                 rejected_items.append(
@@ -267,8 +283,32 @@ reason_level为none无选择理由、generic泛化描述、specific具体理由�
 每条signal的quote必须同时包含实体名与判定依据；不跨片段补全，不推测整个回答的排名数量，不输出总分。
 brand_signals无证据用空列表，但不要据此推断品牌缺席。"""
 
+SYSTEM += """
+必须同时返回 information_units 数组，不限品牌：逐条抽取功能feature、参数parameter、价格price、客户audience、
+使用场景use_case、实施条件implementation、案例case_study、测评方法test_method、限制风险risk、
+问答faq、比较comparison、选择理由selection_reason。没有单元也必须返回[]。
+每项 {kind,subject,value,unit,conditions,effective_time,quote,start,end}。
+subject/value/unit/effective_time 可为null，否则必须是本项quote中的逐字连续子串；conditions为逐字子串数组，例如["仅限专业版"]。
+conditions无法判断可为null并保留未知，不能把null写成不受任何限制；确定无原文条件才用[]。禁止单个字符串或对象。
+quote最多2000字符，保留数字、时间、适用条件、否定和风险，不凭外部知识补全；不要将宣传视为已批准事实。
+功能/概念不是产品，但仍应作为信息单元保留。未知主体用null，不把邻近品牌强行归为主体。
+第一遍没有原问题，禁止使用need_matched；有具体理由用specific，需求匹配由第二遍核验。"""
+SYSTEM += """
+输出紧凑JSON。信息单元尽量用包含必要限定的最短完整句/分句，不重复同一事实，不将每个形容词单独拆条。
+无具体内容时不为实体凑claims或information_units；所有已出现的不同具体信息仍须保留，不能为压缩而遗漏尾部。
+"""
+
+
+def extraction_signature(model: str, base_url: str) -> str:
+    from app.intelligence.model_policy import VERSION, structured_options
+
+    return stable_hash({"version": "pure-text-extraction-v1", "segment": SEGMENT_VERSION,
+                        "prompt": SYSTEM, "model": model, "endpoint": base_url,
+                        "request_policy": VERSION, "options": structured_options(base_url, model)})
+
 
 def analysis_signature(model: str, base_url: str) -> str:
+    from app.intelligence.contextual_analysis import context_signature
     from app.intelligence.diagnosis import DIAGNOSIS_VERSION
     from app.intelligence.evidence import SYSTEM as evidence_system
     from app.intelligence.model_policy import VERSION as model_policy_version
@@ -277,6 +317,8 @@ def analysis_signature(model: str, base_url: str) -> str:
     return stable_hash(
         {
             "pipeline": PIPELINE_VERSION,
+            "extraction_signature": extraction_signature(model, base_url),
+            "context_signature": context_signature(model, base_url),
             "segment": SEGMENT_VERSION,
             "model": model,
             "endpoint": base_url,

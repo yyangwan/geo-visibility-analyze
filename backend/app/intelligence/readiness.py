@@ -20,10 +20,13 @@ def result_readiness(manifest, coverage, summary, status):
     analyzed = coverage.get("segment_states", {}).get("completed", 0)
     processed = coverage.get("processed_segments", analyzed)
     span_defects = coverage.get("rejected_spans", 0)
+    context_coverage = coverage.get("context_analysis", {})
+    context_incomplete = bool(context_coverage and context_coverage.get("status") != "processed")
     semantic_ok = (
         total_segments > 0
         and analyzed == total_segments
         and status in ("ready", "partial")
+        and not context_incomplete
     )
     provider_code = coverage.get("analysis_error_code")
     deferred = coverage.get("deferred_operations", [])
@@ -40,6 +43,8 @@ def result_readiness(manifest, coverage, summary, status):
         if unconfigured
         else "analysis_budget_exhausted"
         if budget_deferred
+        else "context_analysis_incomplete"
+        if context_incomplete
         else "semantic_spans_unresolved"
         if span_defects and processed == total_segments
         else "semantic_coverage_incomplete"
@@ -60,6 +65,7 @@ def result_readiness(manifest, coverage, summary, status):
         "analysis_provider_unavailable": "分析服务暂不可用，已保存的材料不会删除。",
         "analysis_provider_unconfigured": "分析服务尚未配置，需要管理员检查；已保存的材料不会删除。",
         "analysis_budget_exhausted": "部分材料因分析额度不足尚未完成，已完成的结论保留。请管理员调整额度后生成新的分析修订，未分析部分保留未知。",
+        "context_analysis_incomplete": "原文抽取已保留，部分问题语境或需求匹配尚未完成。未完成部分不作为完整竞争结论，可查看原因后生成新分析修订。",
     }
     items = []
 

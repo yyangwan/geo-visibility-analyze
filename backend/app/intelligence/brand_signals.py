@@ -5,7 +5,7 @@ from app.intelligence.semantics import stable_hash
 BRAND_SIGNAL_VERSION = "brand-signals-v1"
 
 
-def summarize_brand_signals(applications, responses, mentions):
+def summarize_brand_signals(applications, responses, mentions, context_analysis=None):
     observations = []
     expected, extracted, rejected = 0, 0, 0
     for application, segment, cache in applications:
@@ -32,6 +32,31 @@ def summarize_brand_signals(applications, responses, mentions):
                 and not mention["identity_ambiguity"]
             ]
             entity_ids = sorted({mention["entity_id"] for mention in matched})
+            requirement_evidence = []
+            if context_analysis is not None:
+                from app.intelligence.information_units import local_units
+
+                units = {item["id"]: item for item in local_units(cache.result)}
+                for context_row in context_analysis["observations"]:
+                    if (context_row["status"] != "completed"
+                        or context_row["owner_kind"] != "answer"
+                        or context_row["owner_id"] != segment.owner_id
+                        or context_row["segment_id"] != segment.id):
+                        continue
+                    for match in context_row["interpretation"]["requirement_matches"]:
+                        unit = units[match["unit_id"]]
+                        if (match["relation"] == "addresses" and unit.get("subject") == signal["name"]
+                            and signal["start"] <= match["start"] < match["end"] <= signal["end"]
+                            and not any(other["unit_id"] == match["unit_id"] and other["relation"] == "contradicts"
+                                        for other in context_row["interpretation"]["requirement_matches"])):
+                            requirement_evidence.append({**match, "context_analysis_id": context_row["id"]})
+            reason_level = signal["reason_level"]
+            if context_analysis is not None:
+                # Owner-free extraction cannot establish a question-specific match.
+                if reason_level == "need_matched":
+                    reason_level = "specific"
+                if requirement_evidence and reason_level == "specific":
+                    reason_level = "need_matched"
             observations.append({
                 "id": stable_hash([BRAND_SIGNAL_VERSION, segment.id, signal]),
                 "response_id": segment.owner_id,
@@ -44,7 +69,8 @@ def summarize_brand_signals(applications, responses, mentions):
                 "quote": signal["quote"], "start": start, "end": end,
                 "recommendation": signal["recommendation"],
                 "explicit_rank": signal["explicit_rank"],
-                "reason_level": signal["reason_level"],
+                "reason_level": reason_level,
+                "requirement_evidence": requirement_evidence,
                 "analysis_status": application.status,
                 "review_state": "unreviewed",
                 "scope": "segment",
