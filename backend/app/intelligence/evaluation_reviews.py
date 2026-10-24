@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.intelligence.models import EvaluationCohortReview
+from app.intelligence.question_context import QuestionReview, validate_review
 from app.intelligence.refresh import request_refresh, state_for_audit
 from app.intelligence.semantics import stable_hash
 
@@ -20,6 +21,7 @@ class CohortReviewRequest(BaseModel):
     decisions: dict[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")], Literal["eligible", "excluded", "needs_review"]] = Field(
         min_length=1, max_length=100
     )
+    contexts: dict[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")], QuestionReview] = Field(default_factory=dict, max_length=100)
     reason: str = Field(min_length=5, max_length=2000)
     expected_version: StrictInt = Field(alias="expectedVersion", ge=0)
     idempotency_key: str = Field(
@@ -27,12 +29,19 @@ class CohortReviewRequest(BaseModel):
     )
 
 
-def reviewed_cohort(base, decisions):
+def reviewed_cohort(base, decisions, contexts=None):
     prompts = {cell["prompt_hash"] for cell in base["cells"]}
     if set(decisions) != prompts:
         raise HTTPException(422, "Review every frozen prompt exactly once")
+    if contexts and set(contexts) != prompts:
+        raise HTTPException(422, "Review context for every frozen prompt exactly once")
     cohort = deepcopy(base)
     for cell in cohort["cells"]:
+        if contexts:
+            review = contexts[cell["prompt_hash"]]
+            validate_review(cell["prompt"], review, decisions[cell["prompt_hash"]], cell["eligibility"] == "excluded")
+            cell["question_context"] = {**cell["question_context"], "review": {**review.model_dump(), "origin": "named_reviewer", "evidence_scope": "reviewer_selected_prompt_spans"}}
+            cell["primary_scenario"] = review.primary_scenario if review.status == "confirmed" else None
         if (
             cell["eligibility"] == "excluded"
             and decisions[cell["prompt_hash"]] != "excluded"
@@ -109,7 +118,7 @@ async def review_cohort(db, run, data, actor_id):
         run_id=run.id,
         version=data.expected_version + 1,
         base_hash=base["hash"],
-        cohort=reviewed_cohort(base, data.decisions),
+        cohort=reviewed_cohort(base, data.decisions, data.contexts),
         reason=data.reason.strip(),
         actor_id=actor_id,
         idempotency_key=data.idempotency_key,

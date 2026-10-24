@@ -68,7 +68,7 @@ def test_review_changes_cohort_identity_without_mutating_base():
     assert aggregate_scores(reviewed, {"s": 80})["score"] == 80
     with pytest.raises(HTTPException):
         reviewed_cohort(base, {"outside": "eligible"})
-    directed = freeze_cohort(base["cells"], [{"name": "方案"}])
+    directed = freeze_cohort([{**base["cells"][0], "prompt": "云衡品牌如何"}], [{"name": "云衡"}])
     with pytest.raises(HTTPException):
         reviewed_cohort(directed, {"p": "eligible"})
 

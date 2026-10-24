@@ -16,6 +16,7 @@ from app.intelligence.models import (
     ProjectContextEvent,
     ProjectContextHead,
 )
+from app.intelligence.question_context import SCENARIOS, Scenario
 from app.intelligence.semantics import stable_hash
 
 
@@ -40,7 +41,7 @@ class ContextRequest(StrictFact):
     @classmethod
     def checked_preferences(cls, value):
         if value:
-            BusinessPreferences.model_validate(value)
+            return BusinessPreferences.model_validate(value).model_dump()
         return value
 
     @model_validator(mode="after")
@@ -55,16 +56,29 @@ class ContextRequest(StrictFact):
 class BusinessPreferences(StrictFact):
     version: Literal["business-preferences-v1"]
     scenario_importance: dict[
-        Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,80}$")],
+        Scenario,
         Annotated[StrictInt, Field(ge=0, le=100)],
-    ] = Field(min_length=1, max_length=50)
+    ] = Field(max_length=8)
     reason: str = Field(min_length=5, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value):
+        if len(value.strip()) < 5:
+            raise ValueError("Meaningful preference reason required")
+        return value.strip()
 
     @model_validator(mode="after")
     def nonzero_importance(self):
-        if not any(self.scenario_importance.values()):
+        if self.scenario_importance and not any(self.scenario_importance.values()):
             raise ValueError("Keep neutral defaults or provide a positive importance")
         return self
+
+
+def preference_projection(context):
+    preferences = (context or {}).get("business_preferences") or {}
+    values = preferences.get("scenario_importance", {})
+    return {"mode": "custom" if values else "neutral", "context_version": (context or {}).get("version", 0), "priority_policy_version": f"scenario-priority-v1:{(context or {}).get('version', 0)}:{(context or {}).get('content_hash', 'neutral')}", "importance": {key: values.get(key, 50) for key in SCENARIOS}, "reason": preferences.get("reason"), "taxonomy": SCENARIOS, "score_weights_changed": False}
 
 
 async def context_snapshot(db, project_id):

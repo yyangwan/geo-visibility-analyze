@@ -97,6 +97,13 @@ async def sync_project_brand_context(
     return {"version": event.version, "content_hash": event.content_hash}
 
 
+@router.get("/projects/{project_id}/scenario-preferences")
+async def get_scenario_preferences(project_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.project_context import preference_projection
+    require_project_scope(user, project_id)
+    return preference_projection(await context_snapshot(db, project_id))
+
+
 from app.intelligence.aliases import AliasRequest, alias_snapshot, decide_alias
 from app.intelligence.mention_bindings import (
     MentionBindingRequest,
@@ -636,13 +643,15 @@ from app.intelligence.identity import (
 
 @router.get("/runs/{run_id}/evaluation-cohort")
 async def get_evaluation_cohort(run_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.question_context import scenario_summary
     run = await action_run(db, user, run_id)
     latest = await latest_cohort_review(db, run.project_id, run.audit_id)
     return {"base": run.manifest.get("evaluation_base_cohort") or run.manifest.get("evaluation_cohort"),
             "cohort": run.manifest.get("evaluation_cohort"),
             "latest_review_version": latest.version if latest else 0,
             "latest_cohort": latest.cohort if latest else None,
-            "applied_review": run.manifest.get("evaluation_review")}
+            "applied_review": run.manifest.get("evaluation_review"),
+            "scenario_summary": scenario_summary(run.manifest.get("evaluation_cohort"))}
 
 
 @router.post("/runs/{run_id}/evaluation-cohort/review", status_code=202)
@@ -654,6 +663,13 @@ async def submit_evaluation_cohort(run_id: str, data: CohortReviewRequest, user:
     event = await review_cohort(db, run, data, str(user["sub"]))
     await db.commit()
     return {"id": event.id, "version": event.version, "cohort_hash": event.cohort["hash"], "refresh_pending": True}
+
+
+@router.get("/runs/{run_id}/scenarios")
+async def get_run_scenarios(run_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.question_context import scenario_projection
+    run = await action_run(db, user, run_id)
+    return scenario_projection(run.manifest, view(run)["summary"]["brand_presence"])
 
 
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
@@ -1114,6 +1130,8 @@ async def get_run(
     if not run:
         raise HTTPException(404, "Run not found")
     result = view(run)
+    from app.intelligence.question_context import scenario_projection
+    result["summary"]["scenario_comparison"] = scenario_projection(run.manifest, result["summary"]["brand_presence"])
     reviews = await identity_snapshot(db, run.project_id)
     observed = {entity["id"] for entity in run.summary.get("entities", [])}
     result["identity_reviews"] = {

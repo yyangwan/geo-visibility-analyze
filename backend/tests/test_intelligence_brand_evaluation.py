@@ -51,7 +51,7 @@ def test_weights_freeze_platform_category_and_prompt_not_success_count():
 
 def test_duplicate_rounds_do_not_increase_weight_and_named_prompts_are_excluded():
     cohort = freeze_cohort(
-        [cell("a"), cell("b", index=2), cell("c", prompt="云衡如何")],
+        [cell("a"), cell("b", index=2), cell("c", prompt="云衡品牌如何")],
         [{"name": "云衡"}],
     )
     assert len(cohort["cells"]) == 2
@@ -64,7 +64,7 @@ def test_duplicate_rounds_do_not_increase_weight_and_named_prompts_are_excluded(
     )  # Neutrality still requires review.
     assert (
         freeze_cohort(
-            [cell("b", index=2), cell("a"), cell("c", prompt="云衡如何")],
+            [cell("b", index=2), cell("a"), cell("c", prompt="云衡品牌如何")],
             [{"name": "云衡"}],
         )["hash"]
         == cohort["hash"]

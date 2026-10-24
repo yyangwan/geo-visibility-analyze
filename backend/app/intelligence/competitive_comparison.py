@@ -66,6 +66,10 @@ def scoped_cohort(cohort, axis, value):
             and cell["category"] == value
             or axis == "platform_category"
             and (cell["platform"], cell["category"]) == value
+            or axis == "scenario"
+            and cell.get("primary_scenario") == value
+            or axis == "platform_scenario"
+            and (cell["platform"], cell.get("primary_scenario")) == value
         )
     ]
     total = sum((Fraction(**cell["weight"]) for cell in cells), Fraction())

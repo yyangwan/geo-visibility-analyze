@@ -5,10 +5,12 @@ from fractions import Fraction
 from math import floor
 
 from app.intelligence.brand_ranking import verified_ranking
+from app.intelligence.question_context import VERSION as CONTEXT_VERSION
+from app.intelligence.question_context import question_proposal
 from app.intelligence.semantics import stable_hash
 
 VERSION = "brand-visibility-v1"
-COHORT_VERSION = "brand-cohort-v1"
+COHORT_VERSION = "brand-cohort-v2"
 WEIGHTS = {"presence": 30, "recommendation": 30, "position": 20, "reasons": 20}
 
 
@@ -34,14 +36,17 @@ def freeze_cohort(samples, brands):
         if key in seen:
             continue
         seen.add(key)
-        directed = any(name in sample["prompt"].casefold() for name in names)
+        context = question_proposal(sample["prompt"], names)
+        directed = any(row["fixed_exclusion"] for row in context["registered_references"])
         cells.append(
             {
                 **sample,
+                "question_context": context,
+                "primary_scenario": None,
                 "eligibility": "excluded" if directed else "needs_review",
                 "eligibility_reason": "named_registered_brand"
                 if directed
-                else "neutrality_not_verified",
+                else "registered_name_ambiguous" if context["registered_references"] else "neutrality_not_verified",
             }
         )
     candidates = [cell for cell in cells if cell["eligibility"] != "excluded"]
@@ -68,7 +73,8 @@ def freeze_cohort(samples, brands):
         "version": COHORT_VERSION,
         "rule_version": VERSION,
         "weight_policy": "equal-platform-category-prompt-v1",
-        "eligibility_policy": "registered-name-screen-review-required-v1",
+        "eligibility_policy": "registered-reference-screen-review-required-v2",
+        "question_context_version": CONTEXT_VERSION,
         "cells": sorted(
             cells, key=lambda item: (item["platform"], item["prompt_hash"])
         ),
