@@ -30,7 +30,7 @@
 
 ## 验证与下一步
 
-本地后端全套 pytest：**786 passed / 9 skipped**；与 CI 一致的 intelligence 范围 Ruff 检查通过。额外真实 MySQL 并发/重试/备份/心跳 **7 项通过**。最新空 MySQL/PostgreSQL 初始化、约束、API/worker 启动及跨语言签名回执已验证，见 [R00 验证](citation-value-fresh-database-20261024.md)。离线 image acceptance 入口在本地代码下验证通过；尚未运行本轮 PR 的 Docker 构建或生产发布。已有 FastAPI lifespan、异步 fixture 及时间 API 弃用告警保留为独立维护项。
+本地后端全套 pytest：**802 passed / 10 skipped**；与 CI 一致的 intelligence 范围 Ruff 检查通过。额外真实 MySQL 并发/重试/备份/心跳 **7 项通过**。最新空 MySQL/PostgreSQL 初始化、约束、API/worker 启动及跨语言签名回执已验证，见 [R00 验证](citation-value-fresh-database-20261024.md)。离线 image acceptance 入口在本地代码下验证通过；尚未运行本轮 PR 的 Docker 构建或生产发布。已有 FastAPI lifespan、异步 fixture 及时间 API 弃用告警保留为独立维护项。
 
 1. 扩大冻结材料的代表性校准及独立留出集，核实主体类别、推荐理由、显式排序及证据支持关系，不能以 JSON/逐字定位通过代替语义质量。
 2. 完成分阶段预算和上下文第二遍；接通缺席目标、业务场景与竞争机会。通用功能与被监测平台不能自动作为竞品。
@@ -45,3 +45,8 @@
 - 问题审核支持 `needs_review`，保留待审核样本权重并阻止总分发布；固定排除的品牌定向题不能恢复纳入。GET 返回最新审核决定及 CAS 版本，分析失败不阻止独立审核问题范围。
 - Portal 接入结论、七类状态、审核抽屉、同请求重试和新修订提示；生产级 React 组件在本地虚构 API 样本下完成桌面与 390px 布局检查。正式页面没有接入示例分数。
 - 尚未接通缺席目标到竞争行动的完整路径；现有行动模块仍按实体关联。全局跨视图范围和后续上下文/材料/行动流程继续实施，不能标作 M1/M2 全部验收通过。
+
+
+## B03 预算补充
+
+冻结每轮请求/token 总上限及阶段预留，回答先按实际片段预留，其余抽取容量给来源；语境/核验配额分别保留。调用前预留、实际/未知用量结算和旧租约恢复进入同一 fenced 账本；未处理范围不按缺席处理。真实本地 MySQL/Pipeline 单次请求结算 4,441 token，新修订缓存复用新增调用为 0。详见 [预算与恢复验收](citation-value-budget-20261024.md)。第二遍语境分析仍待 A02 接入，预留额度不代表已完成该阶段。

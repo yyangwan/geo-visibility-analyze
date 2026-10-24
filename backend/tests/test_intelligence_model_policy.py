@@ -113,10 +113,11 @@ async def test_both_extraction_and_verification_use_the_bounded_non_thinking_pro
     result, _ = await analyze_text(
         "无品牌文字", "fake", "https://api.deepseek.com", "deepseek-v4-flash"
     )
-    verdict = await verify_pair(
+    verdict, usage = await verify_pair(
         "观点", "来源", "fake", "https://api.deepseek.com", "deepseek-v4-flash"
     )
     assert result["entities"] == [] and verdict["relation"] == "supports"
+    assert usage["completion_tokens"] == 20
     assert [row["max_tokens"] for row in requests] == [8192, 2048]
     assert all(row["thinking"] == {"type": "disabled"} for row in requests)
 

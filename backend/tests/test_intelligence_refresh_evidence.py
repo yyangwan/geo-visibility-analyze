@@ -217,8 +217,8 @@ async def test_claim_verification_only_uses_actual_same_answer_sources(
             return {
                 "relation": "invented",
                 "source_quote": "private-invalid-model-output",
-            }
-        return {"relation": "contradicts", "source_quote": "两年质保"}
+            }, {}
+        return {"relation": "contradicts", "source_quote": "两年质保"}, {}
 
     queue = JobQueue(TestSessionLocal, "worker")
     await Pipeline(queue, blobs, analyze=analyze, verify=verify).analyze_run(

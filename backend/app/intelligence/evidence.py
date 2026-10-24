@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
+from app.intelligence.model_budget import usage_fields
 from app.intelligence.model_policy import structured_options
 from app.intelligence.models import (
     ClaimEvidence,
@@ -83,9 +84,12 @@ async def verify_pair(answer_quote, source_text, api_key, base_url, model):
         )
         response.raise_for_status()
         raw = response.json()
-    return checked_verdict(
-        source_text, json.loads(completed_content(raw))
-    )
+    usage = usage_fields(raw.get("usage", {}))
+    try:
+        return checked_verdict(source_text, json.loads(completed_content(raw))), usage
+    except (ValidationError, json.JSONDecodeError, SemanticOutputError) as error:
+        error.usage = usage
+        raise
 
 
 async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
@@ -165,19 +169,61 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
                         invalid += existing.method == "model_output_invalid"
                         processed += 1
                         continue
-                    if not api_key or not await pipeline.reserve_model_request(lease):
+                    receipt = None
+                    operation_id = stable_hash([claim_hash, source["id"], segment.id])
+                    if api_key:
+                        receipt = await pipeline.reserve_model_request(
+                            lease,
+                            phase="verification",
+                            messages=[
+                                SYSTEM,
+                                json.dumps(
+                                    {
+                                        "answer_claim": claim["quote"],
+                                        "source_passage": segment.text,
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            ],
+                            max_output=structured_options(
+                                base_url, model, verification=True
+                            )["max_tokens"],
+                            subject_id=operation_id,
+                        )
+                    else:
+
+                        async def defer(db, operation_id=operation_id):
+                            await pipeline.record_model_deferral(
+                                db,
+                                lease,
+                                "verification",
+                                operation_id,
+                                "analysis_provider_unconfigured",
+                            )
+
+                        await pipeline.queue.checkpoint(lease, defer)
+                    if not receipt:
                         deferred += 1
                         continue
                     method = "model_verification"
+                    usage = {}
                     try:
-                        verdict = await pipeline.verify(
+                        verdict, usage = await pipeline.verify(
                             claim["quote"], segment.text, api_key, base_url, model
                         )
                         verdict = checked_verdict(segment.text, verdict)
-                    except (ValidationError, json.JSONDecodeError, SemanticOutputError):
+                    except (
+                        ValidationError,
+                        json.JSONDecodeError,
+                        SemanticOutputError,
+                    ) as error:
+                        usage = getattr(error, "usage", {})
                         verdict = {"relation": "unverified", "source_quote": ""}
                         method = "model_output_invalid"
                         invalid += 1
+                    except Exception:
+                        await pipeline.settle_model_request(lease, receipt, None)
+                        raise
 
                     async def save(
                         db,
@@ -188,7 +234,10 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
                         answer_segment=answer_segment,
                         verdict=verdict,
                         method=method,
+                        receipt=receipt,
+                        usage=usage,
                     ):
+                        await pipeline.record_model_usage(db, lease, receipt, usage)
                         db.add(
                             ClaimEvidence(
                                 project_id=lease.project_id,

@@ -347,11 +347,13 @@ async def prepare_run(
     from app.intelligence.aliases import alias_snapshot
     from app.intelligence.identity import identity_snapshot
     from app.intelligence.mention_bindings import binding_snapshot, split_snapshot
+    from app.intelligence.model_budget import freeze_run_budget
     from app.intelligence.project_context import context_snapshot
     from app.intelligence.reviews import fact_snapshot
 
     brand_context = await context_snapshot(db, project_id)
     manifest = {
+        "analysis_budget": freeze_run_budget(settings.intelligence_model_request_limit, settings.intelligence_model_token_limit, frozen_responses),
         "entity_aliases": await alias_snapshot(db, project_id),
         "mention_bindings": await binding_snapshot(db, project_id),
         "entity_splits": await split_snapshot(db, project_id),

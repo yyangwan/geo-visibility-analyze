@@ -12,6 +12,14 @@ from app.intelligence.blob import digest
 from app.intelligence.brand_evaluation import summarize_answer_scores
 from app.intelligence.brand_signals import summarize_brand_signals
 from app.intelligence.evidence import align_claims, verify_pair
+from app.intelligence.model_budget import (
+    budget_status,
+    estimate_tokens,
+    recover_reservations,
+    reserve,
+    settle,
+)
+from app.intelligence.model_policy import structured_options
 from app.intelligence.models import (
     ContentSegment,
     EntityMention,
@@ -26,6 +34,7 @@ from app.intelligence.models import (
 from app.intelligence.queue import JobQueue, Lease
 from app.intelligence.semantics import (
     SEGMENT_VERSION,
+    SYSTEM,
     SemanticOutputError,
     analysis_signature,
     analyze_text,
@@ -56,21 +65,77 @@ class Pipeline:
         )
         self.verify = verify
 
-    async def reserve_model_request(self, lease):
-        allowed = False
+    async def reserve_model_request(
+        self, lease, *, phase, messages, max_output, subject_id
+    ):
+        receipt = None
 
-        async def reserve(db):
-            nonlocal allowed
+        async def record(db):
+            nonlocal receipt
             from app.intelligence.models import AnalysisJob
 
             job = await db.get(AnalysisJob, lease.id)
-            used = job.payload.get("model_requests", 0)
-            allowed = used < settings.intelligence_model_request_limit
-            if allowed:
-                job.payload = {**job.payload, "model_requests": used + 1}
+            run = await db.get(IntelligenceRun, lease.run_id)
+            if not run or run.project_id != lease.project_id:
+                raise LookupError("Run not found")
+            ledger, receipt, reason = reserve(
+                job.payload.get("model_budget"),
+                run.manifest["analysis_budget"],
+                phase,
+                estimate_tokens(messages, max_output),
+                subject_id,
+            )
+            deferred = {**job.payload.get("model_deferred", {})}
+            key = stable_hash([phase, subject_id])
+            if receipt:
+                ledger["receipts"][receipt]["lease_version"] = lease.version
+                deferred.pop(key, None)
+            else:
+                deferred[key] = {
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "reason": reason,
+                }
+            job.payload = {
+                **job.payload,
+                "model_budget": ledger,
+                "model_requests": len(ledger["receipts"]),
+                "model_deferred": deferred,
+            }
 
-        await self.queue.checkpoint(lease, reserve)
-        return allowed
+        await self.queue.checkpoint(lease, record)
+        return receipt
+
+    async def settle_model_request(self, lease, receipt, usage):
+        async def record(db):
+            await self.record_model_usage(db, lease, receipt, usage)
+
+        await self.queue.checkpoint(lease, record)
+
+    async def record_model_usage(self, db, lease, receipt, usage):
+        from app.intelligence.models import AnalysisJob
+
+        job = await db.get(AnalysisJob, lease.id)
+        job.payload = {
+            **job.payload,
+            "model_budget": settle(job.payload["model_budget"], receipt, usage),
+        }
+
+    async def record_model_deferral(self, db, lease, phase, subject_id, reason):
+        from app.intelligence.models import AnalysisJob
+
+        job = await db.get(AnalysisJob, lease.id)
+        job.payload = {
+            **job.payload,
+            "model_deferred": {
+                **job.payload.get("model_deferred", {}),
+                stable_hash([phase, subject_id]): {
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "reason": reason,
+                },
+            },
+        }
 
     async def fetch_document(self, lease: Lease):
         audit_id = int(lease.payload["audit_id"])
@@ -279,6 +344,17 @@ class Pipeline:
             owners.append(("snapshot", snapshot_id, text))
 
         async def segment_all(db):
+            from app.intelligence.models import AnalysisJob
+
+            job = await db.get(AnalysisJob, lease.id)
+            ledger = job.payload.get("model_budget") or {
+                "policy": manifest["analysis_budget"],
+                "receipts": {},
+            }
+            job.payload = {
+                **job.payload,
+                "model_budget": recover_reservations(ledger, lease.version),
+            }
             current = await db.get(IntelligenceRun, lease.run_id)
             current.status = "running"
             for kind, owner_id, text in owners:
@@ -346,12 +422,21 @@ class Pipeline:
                         )
                     )
                 result, usage, status, diagnostic = None, {}, "deferred", None
+                receipt = None
                 if cache:
                     result, usage, status = cache.result, cache.usage, "completed"
                     status = "partial" if result.get("rejected_spans") else "completed"
                 elif api_key:
-                    allowed = await self.reserve_model_request(lease)
-                    if allowed:
+                    receipt = await self.reserve_model_request(
+                        lease,
+                        phase="answer_extraction"
+                        if kind == "answer"
+                        else "source_extraction",
+                        messages=[SYSTEM, segment.text],
+                        max_output=structured_options(base_url, model)["max_tokens"],
+                        subject_id=segment.id,
+                    )
+                    if receipt:
                         try:
                             result, usage = await self.analyze(
                                 segment.text, api_key, base_url, model
@@ -362,6 +447,7 @@ class Pipeline:
                                 else "completed"
                             )
                         except (SemanticOutputError, ValidationError) as error:
+                            usage = getattr(error, "usage", {})
                             status = "failed"
                             diagnostic = {
                                 "segment_id": segment.id,
@@ -370,6 +456,9 @@ class Pipeline:
                                 if isinstance(error, SemanticOutputError)
                                 else safe_validation_fields(error),
                             }
+                        except Exception:
+                            await self.settle_model_request(lease, receipt, None)
+                            raise
 
                 async def apply(
                     db,
@@ -378,7 +467,38 @@ class Pipeline:
                     usage=usage,
                     status=status,
                     diagnostic=diagnostic,
+                    receipt=receipt,
+                    kind=kind,
                 ):
+                    if receipt:
+                        await self.record_model_usage(db, lease, receipt, usage)
+                    if status == "deferred" and not api_key:
+                        await self.record_model_deferral(
+                            db,
+                            lease,
+                            "answer_extraction"
+                            if kind == "answer"
+                            else "source_extraction",
+                            segment.id,
+                            "analysis_provider_unconfigured",
+                        )
+                    elif status != "deferred":
+                        from app.intelligence.models import AnalysisJob
+
+                        job = await db.get(AnalysisJob, lease.id)
+                        deferred = {**job.payload.get("model_deferred", {})}
+                        deferred.pop(
+                            stable_hash(
+                                [
+                                    "answer_extraction"
+                                    if kind == "answer"
+                                    else "source_extraction",
+                                    segment.id,
+                                ]
+                            ),
+                            None,
+                        )
+                        job.payload = {**job.payload, "model_deferred": deferred}
                     if diagnostic:
                         from app.intelligence.models import AnalysisJob
 
@@ -494,6 +614,14 @@ class Pipeline:
             coverage["semantic_errors"] = job.payload.get("semantic_errors", [])
             coverage["semantic_error_count"] = job.payload.get(
                 "semantic_error_count", 0
+            )
+            ledger = job.payload.get("model_budget") or {
+                "policy": manifest["analysis_budget"],
+                "receipts": {},
+            }
+            coverage["model_budget"] = budget_status(ledger)
+            coverage["deferred_operations"] = list(
+                job.payload.get("model_deferred", {}).values()
             )
             coverage["evidence_alignment"] = alignment
             coverage["complete"] = (

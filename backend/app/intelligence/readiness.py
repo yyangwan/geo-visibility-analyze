@@ -26,6 +26,24 @@ def result_readiness(manifest, coverage, summary, status):
         and status in ("ready", "partial")
     )
     provider_code = coverage.get("analysis_error_code")
+    deferred = coverage.get("deferred_operations", [])
+    semantic_deferred = [row for row in deferred if row["phase"] != "verification"]
+    unconfigured = any(
+        row["reason"] == "analysis_provider_unconfigured" for row in semantic_deferred
+    )
+    budget_deferred = any(
+        row["reason"] in ("phase_request_limit", "phase_token_limit")
+        for row in semantic_deferred
+    )
+    semantic_code = provider_code or (
+        "analysis_provider_unconfigured"
+        if unconfigured
+        else "analysis_budget_exhausted"
+        if budget_deferred
+        else "semantic_spans_unresolved"
+        if span_defects and processed == total_segments
+        else "semantic_coverage_incomplete"
+    )
     cohort = manifest.get("evaluation_cohort")
     eligible = sum(
         cell["eligibility"] == "eligible" for cell in (cohort or {}).get("cells", [])
@@ -40,6 +58,8 @@ def result_readiness(manifest, coverage, summary, status):
         "analysis_provider_access_denied": "分析服务访问被拒绝，需要管理员核对权限。",
         "analysis_provider_rate_limited": "分析服务限流，任务将按重试策略处理。",
         "analysis_provider_unavailable": "分析服务暂不可用，已保存的材料不会删除。",
+        "analysis_provider_unconfigured": "分析服务尚未配置，需要管理员检查；已保存的材料不会删除。",
+        "analysis_budget_exhausted": "部分材料因分析额度不足尚未完成，已完成的结论保留。请管理员调整额度后生成新的分析修订，未分析部分保留未知。",
     }
     items = []
 
@@ -81,21 +101,15 @@ def result_readiness(manifest, coverage, summary, status):
         "ready"
         if semantic_ok
         else "blocked"
-        if provider_code or status == "failed"
+        if provider_code or unconfigured or status == "failed"
         else "partial"
         if processed
         else "pending",
         processed,
         total_segments,
-        []
-        if semantic_ok
-        else [
-            provider_code or "semantic_spans_unresolved"
-            if span_defects and processed == total_segments
-            else provider_code or "semantic_coverage_incomplete"
-        ],
+        [] if semantic_ok else [semantic_code],
         errors.get(
-            provider_code,
+            semantic_code,
             "文字已全部处理，部分证据片段待核实；相关缺项保留未知，不阻断无关品牌的已验证观察。"
             if processed == total_segments and span_defects
             else "保存文字的分析覆盖与原文章完整性分别判断；未分析不代表没有品牌。",

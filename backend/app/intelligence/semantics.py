@@ -317,8 +317,11 @@ async def analyze_text(
         )
         response.raise_for_status()
         payload = response.json()
-    content = completed_content(payload)
-    return decode_semantic(text, content), {
-        key: int(payload.get("usage", {}).get(key, 0))
-        for key in ("prompt_tokens", "completion_tokens")
-    }
+    from app.intelligence.model_budget import usage_fields
+
+    usage = usage_fields(payload.get("usage", {}))
+    try:
+        return decode_semantic(text, completed_content(payload)), usage
+    except SemanticOutputError as error:
+        error.usage = usage
+        raise
