@@ -230,7 +230,11 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
             identity_ok = (
                 entity["identity_status"] == "confirmed"
                 and not entity.get("role_conflict")
-                and not any(item["identity_ambiguity"] for item in answer_mentions)
+                and not any(
+                    item["identity_ambiguity"]
+                    for item in answer_mentions
+                    if item["entity_id"] == entity["id"]
+                )
             )
             values = {}
             conflicts = []

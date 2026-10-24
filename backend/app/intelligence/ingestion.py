@@ -366,6 +366,9 @@ async def prepare_run(
         if sampling
         else len(frozen_responses),
     }
+    from app.intelligence.brand_presence import freeze_registered_targets
+
+    manifest["brand_targets"] = freeze_registered_targets(manifest["brands"])
     if sampling:
         from app.intelligence.brand_evaluation import freeze_cohort
 

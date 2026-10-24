@@ -641,6 +641,7 @@ async def get_evaluation_cohort(run_id: str, user: dict = Depends(get_current_us
     return {"base": run.manifest.get("evaluation_base_cohort") or run.manifest.get("evaluation_cohort"),
             "cohort": run.manifest.get("evaluation_cohort"),
             "latest_review_version": latest.version if latest else 0,
+            "latest_cohort": latest.cohort if latest else None,
             "applied_review": run.manifest.get("evaluation_review")}
 
 
@@ -648,7 +649,7 @@ async def get_evaluation_cohort(run_id: str, user: dict = Depends(get_current_us
 async def submit_evaluation_cohort(run_id: str, data: CohortReviewRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     action_writer(user)
     run = await action_run(db, user, run_id)
-    if run.status not in ("ready", "partial"):
+    if run.status not in ("ready", "partial", "failed"):
         raise HTTPException(409, "Wait for completed analysis")
     event = await review_cohort(db, run, data, str(user["sub"]))
     await db.commit()
@@ -936,6 +937,12 @@ def require_writer(user: dict):
 
 
 def view(run):
+    from app.intelligence.brand_presence import build_brand_presence
+    from app.intelligence.readiness import result_readiness
+
+    summary = dict(run.summary or {})
+    if "brand_presence" not in summary:
+        summary["brand_presence"] = build_brand_presence(run.manifest, [], [], [], {}, {})
     return {
         "id": run.id,
         "audit_id": str(run.audit_id),
@@ -946,7 +953,8 @@ def view(run):
         "signature": run.signature,
         "input_hash": run.input_hash,
         "coverage": run.coverage,
-        "summary": run.summary,
+        "summary": summary,
+        "readiness": result_readiness(run.manifest, run.coverage or {}, summary, run.status),
         "sources": run.manifest.get("sources", []),
         "responses": [
             {

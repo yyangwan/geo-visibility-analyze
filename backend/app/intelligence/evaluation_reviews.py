@@ -17,7 +17,7 @@ from app.intelligence.semantics import stable_hash
 class CohortReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     base_hash: str = Field(alias="baseHash", pattern=r"^[a-f0-9]{64}$")
-    decisions: dict[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")], Literal["eligible", "excluded"]] = Field(
+    decisions: dict[Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")], Literal["eligible", "excluded", "needs_review"]] = Field(
         min_length=1, max_length=100
     )
     reason: str = Field(min_length=5, max_length=2000)
@@ -35,21 +35,21 @@ def reviewed_cohort(base, decisions):
     for cell in cohort["cells"]:
         if (
             cell["eligibility"] == "excluded"
-            and decisions[cell["prompt_hash"]] == "eligible"
+            and decisions[cell["prompt_hash"]] != "excluded"
         ):
             raise HTTPException(
                 422, "Brand-directed prompt cannot enter competitive scoring"
             )
         cell["eligibility"] = decisions[cell["prompt_hash"]]
         cell["eligibility_reason"] = "named_reviewer_decision"
-    eligible = [cell for cell in cohort["cells"] if cell["eligibility"] == "eligible"]
+    eligible = [cell for cell in cohort["cells"] if cell["eligibility"] != "excluded"]
     platforms = {cell["platform"] for cell in eligible}
     categories = defaultdict(set)
     counts = Counter((cell["platform"], cell["category"]) for cell in eligible)
     for cell in eligible:
         categories[cell["platform"]].add(cell["category"])
     for cell in cohort["cells"]:
-        included = cell["eligibility"] == "eligible"
+        included = cell["eligibility"] != "excluded"
         cell["weight"] = {
             "numerator": int(included),
             "denominator": len(platforms)
@@ -61,7 +61,7 @@ def reviewed_cohort(base, decisions):
     cohort.pop("hash", None)
     cohort.update(
         base_hash=base["hash"],
-        status="reviewed" if eligible else "no_competitive_prompts",
+        status="requires_prompt_review" if any(cell["eligibility"] == "needs_review" for cell in eligible) else "reviewed" if eligible else "no_competitive_prompts",
     )
     cohort["hash"] = stable_hash(cohort)
     return cohort

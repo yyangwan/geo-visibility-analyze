@@ -839,6 +839,12 @@ async def build_summary(db, run):
     summary["brand_evaluation"] = summarize_answer_scores(
         manifest, applications, entities, evidence, summary["brand_signals"]
     )
+    from app.intelligence.brand_presence import build_brand_presence
+
+    summary["brand_presence"] = build_brand_presence(
+        manifest, applications, entities, evidence, summary["brand_signals"],
+        summary["brand_evaluation"],
+    )
     summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
     from app.intelligence.competitive_actions import competitive_diagnoses
 
