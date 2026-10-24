@@ -336,6 +336,7 @@ async def prepare_run(
                 "snippet": observation.snippet,
                 "url_resolution": observation.url_resolution,
                 "snapshot_id": snapshot.id if snapshot else None,
+                "quality": snapshot.quality if snapshot else {},
                 "fetch_status": fetch.status
                 if fetch
                 else "pending"

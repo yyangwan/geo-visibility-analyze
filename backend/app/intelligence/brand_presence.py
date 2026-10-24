@@ -39,33 +39,6 @@ def freeze_registered_targets(brands):
     ]
 
 
-def complete_answers(manifest, applications):
-    by_answer = defaultdict(list)
-    for application, segment, cache in applications:
-        if segment.owner_kind == "answer":
-            by_answer[segment.owner_id].append((application, segment, cache))
-    result = {}
-    for response in manifest["responses"]:
-        rows = sorted(by_answer[response["id"]], key=lambda row: row[1].start_offset)
-        cursor = 0
-        complete = (
-            bool(rows)
-            and not response["error"]
-            and response.get("answer_status", "complete") == "complete"
-        )
-        for application, segment, cache in rows:
-            complete = (
-                complete
-                and segment.start_offset == cursor
-                and application.status == "completed"
-                and bool(cache)
-                and isinstance(cache.result.get("brand_signals"), list)
-            )
-            cursor = segment.end_offset
-        result[response["id"]] = complete and cursor == len(response["text"])
-    return result
-
-
 def build_brand_presence(
     manifest, applications, entities, mentions, signals, evaluation
 ):
@@ -134,6 +107,20 @@ def build_brand_presence(
                     reason_codes=["registered_binding_required"],
                     candidate_entity_ids=sorted(candidates),
                 )
+        bound_entity = entity_index.get(target["entity_id"])
+        if bound_entity:
+            target["names"] = sorted(
+                set(target["names"])
+                | {
+                    name
+                    for name in [
+                        bound_entity["name"],
+                        bound_entity.get("canonical_name"),
+                        *(bound_entity.get("observed_names") or []),
+                    ]
+                    if name
+                }
+            )
         targets.append(target)
     for entity_id, entity in sorted(entity_index.items()):
         if entity_id not in consumed:
@@ -144,7 +131,15 @@ def build_brand_presence(
                     "entity_id": entity_id,
                     "name": entity["name"],
                     "names": sorted(
-                        {entity["name"], *(entity.get("observed_names") or [])}
+                        {
+                            name
+                            for name in [
+                                entity["name"],
+                                entity.get("canonical_name"),
+                                *(entity.get("observed_names") or []),
+                            ]
+                            if name
+                        }
                     ),
                     "role": entity.get("role", "unregistered"),
                     "identity_status": "ambiguous"
@@ -153,7 +148,10 @@ def build_brand_presence(
                     "reason_codes": [],
                 }
             )
-    complete = complete_answers(manifest, applications)
+    from app.intelligence.analysis_coverage import answer_coverage, related_span_defects
+
+    proofs = answer_coverage(manifest, applications)
+    complete = {key: value["input_processed"] for key, value in proofs.items()}
     cohort = manifest.get("evaluation_cohort")
     cells = (
         cohort["cells"]
@@ -205,11 +203,17 @@ def build_brand_presence(
             )
             if not identity_ok:
                 reasons.append("identity_unconfirmed")
+            target_complete = bool(response and complete.get(response["id"]))
+            if response and related_span_defects(
+                proofs[response["id"]], target["names"]
+            ):
+                target_complete = False
+                reasons.append("related_semantic_span_unresolved")
             state, evidence_ids = "unknown", []
             if related and identity_ok:
                 state = "present"
                 evidence_ids = sorted({mention["id"] for mention in related})
-            elif response and complete.get(response["id"], False) and identity_ok:
+            elif response and target_complete and identity_ok:
                 unmatched_name = any(
                     name.casefold() in response["text"].casefold()
                     for name in target["names"]
@@ -245,9 +249,7 @@ def build_brand_presence(
                     "state": state,
                     "reason_codes": sorted(set(reasons)),
                     "evidence_ids": evidence_ids,
-                    "coverage_complete": bool(
-                        response and complete.get(response["id"])
-                    ),
+                    "coverage_complete": target_complete,
                     "score": result["score"],
                     "dimensions": result["dimensions"],
                 }

@@ -87,19 +87,24 @@ def score_observation(
     list_size=None,
     reasons=None,
     evidence_ids=(),
+    mention_evidence_ids=(),
 ):
     dimensions = dict.fromkeys(WEIGHTS)
-    if not complete or not identity_confirmed or present is None:
+    if not identity_confirmed or present is None:
         return {"score": None, "dimensions": dimensions, "status": "pending"}
     if not present:
+        if not complete:
+            return {"score": None, "dimensions": dimensions, "status": "pending"}
         return {
             "score": 0,
             "dimensions": dict.fromkeys(WEIGHTS, 0),
             "status": "complete",
         }
-    if not evidence_ids:
+    if not evidence_ids and not mention_evidence_ids:
         return {"score": None, "dimensions": dimensions, "status": "pending"}
     dimensions["presence"] = 100
+    if not complete:
+        return {"score": None, "dimensions": dimensions, "status": "partial"}
     if type(recommendation) is int and 0 <= recommendation <= 4:
         dimensions["recommendation"] = recommendation * 25
     if type(rank) is int and type(list_size) is int and 1 <= rank <= list_size:
@@ -171,33 +176,14 @@ def aggregate_scores(cohort, scores):
 
 def summarize_answer_scores(manifest, applications, entities, mentions, signals):
     """Conservative whole-answer projection; no majority vote across contradictions."""
+    from app.intelligence.analysis_coverage import answer_coverage, related_span_defects
+
+    proofs = answer_coverage(manifest, applications)
     rows = []
     cohort = manifest.get("evaluation_cohort")
     for response in manifest["responses"]:
-        segments = sorted(
-            [
-                (application, segment, cache)
-                for application, segment, cache in applications
-                if segment.owner_kind == "answer" and segment.owner_id == response["id"]
-            ],
-            key=lambda row: row[1].start_offset,
-        )
-        cursor = 0
-        complete = (
-            bool(segments)
-            and not response["error"]
-            and response.get("answer_status", "complete") == "complete"
-        )
-        for application, segment, cache in segments:
-            complete = (
-                complete
-                and segment.start_offset == cursor
-                and application.status == "completed"
-                and bool(cache)
-                and cache.result.get("brand_signals") is not None
-            )
-            cursor = segment.end_offset
-        complete = complete and cursor == len(response["text"])
+        proof = proofs[response["id"]]
+        complete = proof["input_processed"]
         answer_mentions = [
             item
             for item in mentions
@@ -244,7 +230,15 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
                 if len(distinct) > 1:
                     conflicts.append(field)
             result = score_observation(
-                complete=complete,
+                complete=complete
+                and not related_span_defects(
+                    proof,
+                    [
+                        entity.get("name", ""),
+                        entity.get("canonical_name", ""),
+                        *entity.get("observed_names", []),
+                    ],
+                ),
                 identity_confirmed=identity_ok,
                 present=presence,
                 recommendation=values["recommendation"],
@@ -256,6 +250,11 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
                 if not conflicts
                 else None,
                 evidence_ids=[item["id"] for item in observed],
+                mention_evidence_ids=[
+                    item["id"]
+                    for item in answer_mentions
+                    if item["entity_id"] == entity["id"] and item.get("id")
+                ],
             )
             rows.append(
                 {

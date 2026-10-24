@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.intelligence.brand_evaluation import freeze_cohort, summarize_answer_scores
 from app.intelligence.brand_presence import (
     build_brand_presence,
@@ -82,6 +84,79 @@ def test_failed_analysis_is_unknown_and_preserves_the_full_target_row():
     assert result["observations"][0]["state"] == "unknown"
     assert "semantic_coverage_incomplete" in result["observations"][0]["reason_codes"]
     assert result["scope_scores"][0]["total"]["score"] is None
+
+
+@pytest.mark.parametrize(
+    "subject,expected",
+    [("其他品牌", "observed_absent"), ("云衡", "unknown"), (None, "unknown")],
+)
+def test_local_span_defects_only_block_related_or_unlocalizable_absence(
+    subject, expected
+):
+    manifest, applications = fixture()
+    applications[0][0].status = "partial"
+    applications[0][2].result.update(
+        rejected_spans=1,
+        rejected_items=[{"candidate": {"name": subject, "quote": "待定位片段"}}],
+    )
+    result = projection(manifest, applications)
+    assert result["observations"][0]["state"] == expected
+    assert result["observations"][0]["coverage_complete"] is (
+        expected == "observed_absent"
+    )
+
+
+def test_partial_without_complete_rejection_receipts_cannot_prove_absence():
+    manifest, applications = fixture()
+    applications[0][0].status = "partial"
+    applications[0][2].result.update(rejected_spans=1)
+    assert projection(manifest, applications)["observations"][0]["state"] == "unknown"
+
+
+def test_missing_tail_and_mismatched_text_cannot_prove_absence():
+    manifest, applications = fixture()
+    segment = applications[0][1]
+    segment.end_offset -= 1
+    assert projection(manifest, applications)["observations"][0]["state"] == "unknown"
+    segment.end_offset += 1
+    segment.text = "其他文字"
+    assert projection(manifest, applications)["observations"][0]["state"] == "unknown"
+
+
+def test_verified_positive_mention_survives_incomplete_signal_extraction():
+    from app.intelligence.brand_evaluation import score_observation
+
+    result = score_observation(
+        complete=False,
+        identity_confirmed=True,
+        present=True,
+        mention_evidence_ids=["mention"],
+    )
+    assert result["dimensions"]["presence"] == 100
+    assert result["dimensions"]["recommendation"] is None
+    assert result["score"] is None
+    assert result["status"] == "partial"
+    unproven = score_observation(complete=False, identity_confirmed=True, present=True)
+    assert unproven["dimensions"]["presence"] is None
+
+
+def test_readiness_distinguishes_processed_text_from_unresolved_spans():
+    manifest, _ = fixture()
+    readiness = result_readiness(
+        manifest,
+        {
+            "total_segments": 3,
+            "processed_segments": 3,
+            "segment_states": {"partial": 3},
+            "rejected_spans": 2,
+        },
+        {},
+        "partial",
+    )
+    semantics = next(row for row in readiness["items"] if row["key"] == "semantics")
+    assert semantics["completed"] == 3 and semantics["total"] == 3
+    assert semantics["state"] == "partial"
+    assert semantics["reason_codes"] == ["semantic_spans_unresolved"]
 
 
 def test_pending_planned_answer_never_vanishes_from_the_denominator():
@@ -282,7 +357,19 @@ def test_failed_run_detail_exposes_targets_and_safe_blocker_before_any_summary()
     from app.utils.timezone import utcnow
 
     manifest, _ = fixture()
-    run = SimpleNamespace(id="r1", audit_id=1, revision=1, status="failed", created_at=utcnow(), finished_at=utcnow(), signature="s", input_hash="h", coverage={"analysis_error_code": "analysis_provider_insufficient_balance"}, summary={}, manifest=manifest)
+    run = SimpleNamespace(
+        id="r1",
+        audit_id=1,
+        revision=1,
+        status="failed",
+        created_at=utcnow(),
+        finished_at=utcnow(),
+        signature="s",
+        input_hash="h",
+        coverage={"analysis_error_code": "analysis_provider_insufficient_balance"},
+        summary={},
+        manifest=manifest,
+    )
     detail = view(run)
     assert detail["summary"]["brand_presence"]["targets"][0]["entity_id"] is None
     assert detail["summary"]["brand_presence"]["observations"][0]["state"] == "unknown"

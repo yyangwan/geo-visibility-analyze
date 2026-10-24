@@ -356,12 +356,20 @@ async def test_cache_reuse_preserves_each_answer_owner_and_unknown_brands(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "saved_text,usable",
+    [
+        ("article", True),
+        ("环境异常\n当前环境异常，完成验证后即可继续访问。\n去验证", False),
+    ],
+)
 async def test_enrichment_creates_new_run_without_mutating_original(
-    db_session, tmp_path, monkeypatch
+    db_session, tmp_path, monkeypatch, saved_text, usable
 ):
     from app.config import settings
 
     monkeypatch.setattr(settings, "intelligence_refresh_debounce_seconds", 0)
+    monkeypatch.setattr(settings, "analysis_llm_api_key", "fake")
     audit = await fixture_audit(
         db_session,
         sources=[
@@ -385,7 +393,11 @@ async def test_enrichment_creates_new_run_without_mutating_original(
 
     async def capture(*_):
         return CapturedSource(
-            "https://example.com/article", 200, b"<p>article</p>", "article", "unknown"
+            "https://example.com/article",
+            200,
+            saved_text.encode(),
+            saved_text,
+            "unknown",
         )
 
     pipeline = Pipeline(queue, LocalBlobStore(tmp_path), capture=capture)
@@ -402,6 +414,20 @@ async def test_enrichment_creates_new_run_without_mutating_original(
     assert runs[0].manifest["sources"][0]["snapshot_id"] is None
     assert runs[1].manifest["sources"][0]["snapshot_id"] is not None
     assert (await db_session.scalar(select(SourceSnapshot))).completeness == "unknown"
+    snapshot = await db_session.scalar(select(SourceSnapshot))
+    assert snapshot.quality["evidence_usable"] is usable
+    assert runs[1].manifest["sources"][0]["quality"] == snapshot.quality
+    calls = []
+
+    async def analyze(value, *_):
+        calls.append(value)
+        return checked_result(value, {}), {}
+
+    pipeline.analyze = analyze
+    await pipeline.analyze_run(await queue.claim())
+    assert (saved_text in calls) is usable
+    await db_session.refresh(runs[1])
+    assert runs[1].coverage["unusable_source_observations"] == (0 if usable else 1)
 
 
 @pytest.mark.asyncio

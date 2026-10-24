@@ -1,6 +1,7 @@
 """Independent result prerequisites, projected from one immutable run."""
 
 from app.intelligence.brand_presence import build_brand_presence
+from app.intelligence.source_quality import usable_snapshot
 
 
 def result_readiness(manifest, coverage, summary, status):
@@ -17,6 +18,8 @@ def result_readiness(manifest, coverage, summary, status):
     )
     total_segments = coverage.get("total_segments", 0)
     analyzed = coverage.get("segment_states", {}).get("completed", 0)
+    processed = coverage.get("processed_segments", analyzed)
+    span_defects = coverage.get("rejected_spans", 0)
     semantic_ok = (
         total_segments > 0
         and analyzed == total_segments
@@ -80,14 +83,22 @@ def result_readiness(manifest, coverage, summary, status):
         else "blocked"
         if provider_code or status == "failed"
         else "partial"
-        if analyzed
+        if processed
         else "pending",
-        analyzed,
+        processed,
         total_segments,
-        [] if semantic_ok else [provider_code or "semantic_coverage_incomplete"],
+        []
+        if semantic_ok
+        else [
+            provider_code or "semantic_spans_unresolved"
+            if span_defects and processed == total_segments
+            else provider_code or "semantic_coverage_incomplete"
+        ],
         errors.get(
             provider_code,
-            "保存文字的分析覆盖与原文章完整性分别判断；未分析不代表没有品牌。",
+            "文字已全部处理，部分证据片段待核实；相关缺项保留未知，不阻断无关品牌的已验证观察。"
+            if processed == total_segments and span_defects
+            else "保存文字的分析覆盖与原文章完整性分别判断；未分析不代表没有品牌。",
         ),
         "evidence",
         "inspect_analysis",
@@ -132,14 +143,19 @@ def result_readiness(manifest, coverage, summary, status):
         "审核问题范围",
     )
     saved = sum(bool(source.get("snapshot_id")) for source in sources)
+    usable = sum(usable_snapshot(source) for source in sources)
+    unusable = saved - usable
     item(
         "sources",
         "来源正文",
         "partial" if sources else "not_applicable",
-        saved,
+        usable,
         len(sources),
-        ["original_article_completeness_unknown"] if sources else [],
-        "按来源观察计数；正文已保存不等于原文章完整，未命中不能证明全文未提及。",
+        (["source_saved_text_unusable"] if unusable else [])
+        + (["original_article_completeness_unknown"] if sources else []),
+        f"已保存 {saved} / {len(sources)} 条来源观察，其中 {unusable} 条正文不可用（验证页、空内容或疑似导航页），保留供核对，不作为正文证据。完整性未知时未命中不能证明全文未提及。"
+        if unusable
+        else "按来源观察计数；正文已保存不等于原文章完整，未命中不能证明全文未提及。",
         "sources",
         "inspect_sources",
         "核对来源状态",

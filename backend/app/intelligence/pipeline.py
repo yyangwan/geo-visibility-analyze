@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import settings
+from app.intelligence.analysis_coverage import segment_processed
 from app.intelligence.blob import digest
 from app.intelligence.brand_evaluation import summarize_answer_scores
 from app.intelligence.brand_signals import summarize_brand_signals
@@ -32,6 +33,7 @@ from app.intelligence.semantics import (
     safe_validation_fields,
     stable_hash,
 )
+from app.intelligence.source_quality import assess_text, usable_snapshot
 from app.intelligence.sources import SourceBlocked, SourceUnavailable, capture_source
 from app.utils.timezone import utcnow
 
@@ -129,6 +131,7 @@ class Pipeline:
                     raise
                 continue
             body_hash = digest(captured.text.encode())
+            quality = assess_text(captured.text)
             representation = stable_hash(
                 [
                     body_hash,
@@ -137,6 +140,7 @@ class Pipeline:
                     captured.completeness,
                     "public-http",
                     captured.final_url,
+                    quality,
                 ]
             )
             prefix = (
@@ -157,6 +161,7 @@ class Pipeline:
                 body_hash=body_hash,
                 text_blob=text_blob,
                 raw_blob=raw_blob,
+                quality=quality,
             ):
                 # The document lock serializes shared-snapshot insertion across audits.
                 await db.scalar(
@@ -186,6 +191,7 @@ class Pipeline:
                         raw_sha256=raw_blob.sha256,
                         completeness=captured.completeness,
                         extractor_version=captured.extractor_version,
+                        quality=quality,
                     )
                     db.add(snapshot)
                     await db.flush()
@@ -250,7 +256,11 @@ class Pipeline:
             if item["title"] or item["snippet"]
         ]
         for snapshot_id in sorted(
-            {item["snapshot_id"] for item in manifest["sources"] if item["snapshot_id"]}
+            {
+                item["snapshot_id"]
+                for item in manifest["sources"]
+                if usable_snapshot(item)
+            }
         ):
             async with self.queue.sessions() as db:
                 snapshot = await db.scalar(
@@ -708,6 +718,20 @@ async def build_summary(db, run):
         "segment_states": dict(states),
         "total_characters": total_chars,
         "analyzed_characters": analyzed_chars,
+        "processed_segments": sum(
+            segment_processed(application, cache)
+            for application, _, cache in applications
+        ),
+        "processed_characters": sum(
+            len(segment.text)
+            for application, segment, cache in applications
+            if segment_processed(application, cache)
+        ),
+        "rejected_spans": sum(
+            (cache.result or {}).get("rejected_spans", 0)
+            for _, _, cache in applications
+            if cache
+        ),
         "responses": len(response_map),
         "expected_samples": manifest.get("expected_samples", len(response_map)),
         "pending_samples": sum(
@@ -725,6 +749,10 @@ async def build_summary(db, run):
         "failed_responses": sum(bool(item["error"]) for item in response_map.values()),
         "sources": len(manifest["sources"]),
         "captured_sources": sum(bool(s["snapshot_id"]) for s in manifest["sources"]),
+        "unusable_source_observations": sum(
+            bool(s["snapshot_id"]) and not usable_snapshot(s)
+            for s in manifest["sources"]
+        ),
         "complete": bool(applications)
         and states.get("completed", 0) == len(applications)
         and not any(s["fetch_status"] != "captured" for s in manifest["sources"])
@@ -842,7 +870,11 @@ async def build_summary(db, run):
     from app.intelligence.brand_presence import build_brand_presence
 
     summary["brand_presence"] = build_brand_presence(
-        manifest, applications, entities, evidence, summary["brand_signals"],
+        manifest,
+        applications,
+        entities,
+        evidence,
+        summary["brand_signals"],
         summary["brand_evaluation"],
     )
     summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
