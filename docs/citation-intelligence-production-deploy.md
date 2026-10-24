@@ -1,5 +1,7 @@
 # 引用情报生产部署与回退
 
+> 2026-10-24 价值分析 v3 分支采用 `citation_value_20261024` 独立空库基线。本页下述固定 `intelligence_production` 配置属于现有部署流程，不能直接用于初始化本轮新结构。先执行[空库验证与发布前置说明](citation-value-fresh-database-20261024.md)，在 Q02 完成并验证新库目标、独立运行配置和各版本回退配置后才能发布。当前未对生产旧库执行升级或切换。
+
 本流程启用新的独立数据库、API 和 worker。旧 `geo-visibility-analyze-backend-1` 容器、旧数据库及旧公网入口不在该脚本操作范围。Portal 与 ContentOS 的接入需要协调发布；仅启动内部服务不会自动切换原公网 API。
 
 ## 上线准备

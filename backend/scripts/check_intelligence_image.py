@@ -10,6 +10,7 @@ from alembic.script import ScriptDirectory
 
 from app.intelligence.blob import LocalBlobStore
 from app.intelligence.report_pdf import render_pdf
+from app.intelligence.schema_version import SCHEMA_REVISION
 from app.intelligence.storage_check import check_storage
 
 
@@ -27,7 +28,7 @@ async def main():
     assert not (root / ".keys").exists(), "Signing keys leaked into image"
     config = Config(str(root / "alembic.ini"))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["evaluation_reviews_20261022"], "Unexpected migration head"
+    assert heads == [SCHEMA_REVISION], "Unexpected fresh schema head"
     with tempfile.TemporaryDirectory(prefix="intelligence-image-") as temporary:
         probe = await check_storage(
             LocalBlobStore(Path(temporary)), backend="local", write_probe=True

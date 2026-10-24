@@ -39,7 +39,6 @@ def schema_head():
     backend = Path(__file__).resolve().parents[2]
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "alembic"))
-    config.set_main_option("version_locations", str(backend / "alembic" / "schema"))
     return ScriptDirectory.from_config(config).get_current_head()
 
 
@@ -118,14 +117,14 @@ def write_private(path, data):
         os.fsync(file.fileno())
 
 
-def reference_pairs(row):
+def reference_pairs(row, *, text_required=True):
     project = row["project_id"]
     for key_field, hash_field in [
         ("text_key", "text_sha256"),
         ("raw_key", "raw_sha256"),
     ]:
-        key, checksum = row[key_field], row[hash_field]
-        if key is None and checksum is None and key_field == "raw_key":
+        key, checksum = row.get(key_field), row.get(hash_field)
+        if key is None and checksum is None and (key_field == "raw_key" or not text_required):
             continue
         if (
             not isinstance(key, str)
@@ -201,8 +200,8 @@ def export_database(connection, directory, *, allow_sqlite_test=False):
                 try:
                     for values in result:
                         row = dict(zip(table.columns.keys(), values, strict=True))
-                        if table.name == "intelligence_snapshots":
-                            for key, sha in reference_pairs(row):
+                        if table.name in ("intelligence_snapshots", "intelligence_owned_assets"):
+                            for key, sha in reference_pairs(row, text_required=table.name == "intelligence_snapshots"):
                                 if key in refs and refs[key] != sha:
                                     raise BackupInvalid(
                                         "Conflicting immutable object reference"
@@ -326,8 +325,8 @@ def verify_bundle(directory, *, allow_incomplete=False):
                         strict=True,
                     )
                 )
-                if name == "intelligence_snapshots":
-                    for key, sha in reference_pairs(row):
+                if name in ("intelligence_snapshots", "intelligence_owned_assets"):
+                    for key, sha in reference_pairs(row, text_required=name == "intelligence_snapshots"):
                         if key in refs and refs[key] != sha:
                             raise BackupInvalid("Conflicting object reference")
                         refs[key] = sha

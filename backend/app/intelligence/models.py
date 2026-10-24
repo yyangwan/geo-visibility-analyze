@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -124,6 +125,7 @@ class SourceSnapshot(Scoped, Base):
     completeness: Mapped[str] = mapped_column(String(20), default="unknown")
     extractor_version: Mapped[str] = mapped_column(String(50))
     integrity_status: Mapped[str] = mapped_column(String(24), default="verified")
+    quality: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class SourceFetch(Scoped, Base):
@@ -557,12 +559,31 @@ class BrandFact(Scoped, Base):
             ["project_id", "review_id"],
             ["intelligence_claim_reviews.project_id", "intelligence_claim_reviews.id"],
         ),
+        ForeignKeyConstraint(
+            ["project_id", "owned_asset_revision_id", "owned_asset_version"],
+            [
+                "intelligence_owned_assets.project_id",
+                "intelligence_owned_assets.id",
+                "intelligence_owned_assets.version",
+            ],
+        ),
+        CheckConstraint(
+            "(source_kind = 'citation_review' AND review_id IS NOT NULL AND entity_id IS NOT NULL AND identity_event_id IS NOT NULL AND owned_asset_revision_id IS NULL AND owned_asset_version IS NULL) OR "
+            "(source_kind = 'owned_asset_revision' AND review_id IS NULL AND owned_asset_revision_id IS NOT NULL AND owned_asset_version IS NOT NULL AND target_id IS NOT NULL AND registry_brand_id IS NOT NULL)",
+            name="ck_fact_source_branch",
+        ),
     )
     fact_key: Mapped[str] = mapped_column(String(64))
     version: Mapped[int] = mapped_column(Integer)
-    entity_id: Mapped[str] = mapped_column(String(32))
-    identity_event_id: Mapped[str] = mapped_column(String(32))
-    review_id: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[str | None] = mapped_column(String(32))
+    identity_event_id: Mapped[str | None] = mapped_column(String(32))
+    review_id: Mapped[str | None] = mapped_column(String(32))
+    source_kind: Mapped[str] = mapped_column(String(32), default="citation_review")
+    target_id: Mapped[str | None] = mapped_column(String(200))
+    registry_brand_id: Mapped[str | None] = mapped_column(String(50))
+    owned_asset_revision_id: Mapped[str | None] = mapped_column(String(32))
+    owned_asset_version: Mapped[int | None] = mapped_column(Integer)
+    source_ref: Mapped[dict] = mapped_column(JSON, default=dict)
     statement: Mapped[str] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(Text)
     valid_from: Mapped[datetime] = mapped_column(DateTime)
@@ -679,6 +700,7 @@ class PublishedAsset(Scoped, Base):
     actor_id: Mapped[str] = mapped_column(String(200))
     idempotency_key: Mapped[str] = mapped_column(String(100))
     request_hash: Mapped[str] = mapped_column(String(64))
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class EntityAliasEvent(Scoped, Base):
@@ -742,6 +764,7 @@ class ProjectContextEvent(Scoped, Base):
     version: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(64))
     brands: Mapped[list] = mapped_column(JSON)
+    business_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
     received_by: Mapped[str] = mapped_column(String(200))
 
 
@@ -749,3 +772,107 @@ class ProjectContextHead(Base):
     __tablename__ = "intelligence_project_context_heads"
     project_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ContextAnalysis(Scoped, Base):
+    """Second-pass results belong to an exact run and business context."""
+
+    __tablename__ = "intelligence_context_analyses"
+    __table_args__ = (
+        UniqueConstraint("project_id", "id"),
+        UniqueConstraint(
+            "project_id",
+            "run_id",
+            "owner_kind",
+            "owner_id",
+            "context_hash",
+            "signature",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "run_id"],
+            ["intelligence_runs.project_id", "intelligence_runs.id"],
+        ),
+        CheckConstraint(
+            "owner_kind IN ('answer', 'snapshot', 'owned_asset')",
+            name="ck_context_owner_kind",
+        ),
+        Index("ix_context_run_page", "project_id", "run_id", "created_at", "id"),
+    )
+    run_id: Mapped[str] = mapped_column(String(32))
+    owner_kind: Mapped[str] = mapped_column(String(24))
+    owner_id: Mapped[str] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    context_hash: Mapped[str] = mapped_column(String(64))
+    signature: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+
+
+class OwnedContentAsset(Scoped, Base):
+    """One row per immutable content revision; capture/verification may progress."""
+
+    __tablename__ = "intelligence_owned_assets"
+    __table_args__ = (
+        UniqueConstraint("project_id", "id"),
+        UniqueConstraint("project_id", "id", "version"),
+        UniqueConstraint("project_id", "asset_key", "version"),
+        UniqueConstraint("project_id", "idempotency_key"),
+        ForeignKeyConstraint(
+            ["project_id", "snapshot_id"],
+            ["intelligence_snapshots.project_id", "intelligence_snapshots.id"],
+        ),
+        CheckConstraint("version >= 1", name="ck_owned_asset_version"),
+        CheckConstraint("source_kind IN ('url', 'text')", name="ck_owned_asset_source"),
+        Index(
+            "ix_owned_asset_page", "project_id", "registry_brand_id", "created_at", "id"
+        ),
+    )
+    asset_key: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer)
+    registry_brand_id: Mapped[str] = mapped_column(String(50))
+    target_id: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(300))
+    source_kind: Mapped[str] = mapped_column(String(16))
+    original_url: Mapped[str | None] = mapped_column(Text)
+    snapshot_id: Mapped[str | None] = mapped_column(String(32))
+    text_key: Mapped[str | None] = mapped_column(String(500))
+    text_sha256: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="registered")
+    verification: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_id: Mapped[str] = mapped_column(String(200))
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))
+
+
+class ActionPlanRevision(Scoped, Base):
+    """Immutable task payload; execution status lives outside this signature."""
+
+    __tablename__ = "intelligence_action_plan_revisions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "id"),
+        UniqueConstraint("project_id", "action_id", "revision"),
+        UniqueConstraint("project_id", "idempotency_key"),
+        ForeignKeyConstraint(
+            ["project_id", "action_id"],
+            ["intelligence_action_plans.project_id", "intelligence_action_plans.id"],
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "run_id"],
+            ["intelligence_runs.project_id", "intelligence_runs.id"],
+        ),
+        CheckConstraint("revision >= 1", name="ck_action_revision_number"),
+        Index("ix_action_revision_page", "project_id", "action_id", "revision"),
+    )
+    action_id: Mapped[str] = mapped_column(String(32))
+    run_id: Mapped[str] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(Integer)
+    task_key: Mapped[str] = mapped_column(String(64))
+    signature: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON)
+    dependencies: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_id: Mapped[str] = mapped_column(String(200))
+    reason: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))

@@ -1,9 +1,9 @@
 """Portal-owned versioned registered-brand context; immutable receiver receipts."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import HTTPException
-from pydantic import Field, model_validator
+from pydantic import Field, StrictInt, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -34,6 +34,14 @@ class ContextBrand(BrandSnapshot):
 class ContextRequest(StrictFact):
     version: int = Field(ge=1)
     brands: list[ContextBrand] = Field(max_length=200)
+    business_preferences: dict = Field(default_factory=dict)
+
+    @field_validator("business_preferences")
+    @classmethod
+    def checked_preferences(cls, value):
+        if value:
+            BusinessPreferences.model_validate(value)
+        return value
 
     @model_validator(mode="after")
     def unique_brands(self):
@@ -41,6 +49,21 @@ class ContextRequest(StrictFact):
             not row.name.strip() for row in self.brands
         ):
             raise ValueError("Distinct brand IDs and nonblank names required")
+        return self
+
+
+class BusinessPreferences(StrictFact):
+    version: Literal["business-preferences-v1"]
+    scenario_importance: dict[
+        Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,80}$")],
+        Annotated[StrictInt, Field(ge=0, le=100)],
+    ] = Field(min_length=1, max_length=50)
+    reason: str = Field(min_length=5, max_length=2000)
+
+    @model_validator(mode="after")
+    def nonzero_importance(self):
+        if not any(self.scenario_importance.values()):
+            raise ValueError("Keep neutral defaults or provide a positive importance")
         return self
 
 
@@ -56,6 +79,7 @@ async def context_snapshot(db, project_id):
             "version": event.version,
             "content_hash": event.content_hash,
             "brands": event.brands,
+            "business_preferences": event.business_preferences,
         }
         if event
         else None
@@ -105,7 +129,9 @@ async def receive_context(db, project_id, data, actor_id):
                     422, "Brand binding has no confirmed project identity proof"
                 )
     brands = [row.model_dump() for row in sorted(data.brands, key=lambda row: row.id)]
-    content_hash = stable_hash(brands)
+    content_hash = stable_hash(
+        {"brands": brands, "business_preferences": data.business_preferences}
+    )
     previous = await db.scalar(
         select(ProjectContextEvent)
         .where(
@@ -125,6 +151,7 @@ async def receive_context(db, project_id, data, actor_id):
         version=data.version,
         content_hash=content_hash,
         brands=brands,
+        business_preferences=data.business_preferences,
         received_by=actor_id,
     )
     head.version = data.version
