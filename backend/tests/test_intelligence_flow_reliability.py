@@ -43,14 +43,30 @@ from tests.test_intelligence_sampling import new_audit, result_for
 def test_invalid_model_output_has_only_safe_field_diagnostics():
     secret = "private-model-text-and-token"
     with pytest.raises(SemanticOutputError) as raised:
-        decode_semantic("原文", json.dumps({"entities": [{"name": secret}]}))
+        decode_semantic(
+            "原文",
+            json.dumps(
+                {
+                    "entities": [{"name": secret}],
+                    "claims": [],
+                    "topics": [],
+                    "brand_signals": [],
+                }
+            ),
+        )
     diagnostic = json.dumps(raised.value.fields)
     assert "entities" in diagnostic and secret not in diagnostic
     assert "input" not in diagnostic and "url" not in diagnostic
     for content in (None, "not json"):
         with pytest.raises(SemanticOutputError):
             decode_semantic("原文", content)
-    assert decode_semantic("原文", '```json\n{"topics": []}\n```')["entities"] == []
+    assert (
+        decode_semantic(
+            "原文",
+            '```json\n{"entities": [], "claims": [], "topics": [], "brand_signals": []}\n```',
+        )["entities"]
+        == []
+    )
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,12 @@
 
 import hashlib
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
-PIPELINE_VERSION = "citation-intelligence-16"
+PIPELINE_VERSION = "citation-intelligence-17"
 SEGMENT_VERSION = "unicode-nonoverlap-1"
 
 
@@ -46,17 +46,19 @@ class EntityCandidate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     kind: str = Field(pattern=r"^(brand|organization|product|person|other)$")
     quote: str = Field(min_length=1, max_length=200)
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
+    start: StrictInt = Field(ge=0)
+    end: StrictInt = Field(gt=0)
     sentiment: str = Field(pattern=r"^(positive|neutral|negative|unknown)$")
-    attributes: list[str] = Field(default_factory=list, max_length=20)
+    attributes: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(
+        default_factory=list, max_length=20
+    )
 
 
 class ClaimCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     quote: str = Field(min_length=1, max_length=1000)
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
+    start: StrictInt = Field(ge=0)
+    end: StrictInt = Field(gt=0)
     subject: str = Field(max_length=200)
     topic: str = Field(max_length=200)
 
@@ -80,7 +82,9 @@ class SemanticResult(BaseModel):
     claims: list[ClaimCandidate] = Field(default_factory=list, max_length=100)
     topics: list[str] = Field(default_factory=list, max_length=50)
     # None distinguishes omitted/old extraction from a checked empty result.
-    brand_signals: list[BrandSignalCandidate] | None = Field(default=None, max_length=300)
+    brand_signals: list[BrandSignalCandidate] | None = Field(
+        default=None, max_length=300
+    )
 
 
 class SemanticOutputError(ValueError):
@@ -105,6 +109,10 @@ def safe_validation_fields(error):
         "attributes",
         "subject",
         "topic",
+        "brand_signals",
+        "recommendation",
+        "explicit_rank",
+        "reason_level",
     }
     return [
         {
@@ -124,7 +132,39 @@ def decode_semantic(text, content):
         value = content.strip()
         if value.startswith("```json\n") and value.endswith("\n```"):
             value = value[8:-4].strip()
-        return checked_result(text, json.loads(value))
+        value = json.loads(value)
+        if not isinstance(value, dict):
+            raise SemanticOutputError([{"path": [], "type": "object_required"}])
+        required = ("entities", "claims", "topics", "brand_signals")
+        missing = [key for key in required if key not in value]
+        if missing:
+            raise SemanticOutputError(
+                [{"path": [key], "type": "missing"} for key in missing]
+            )
+        invalid_arrays = [key for key in required if not isinstance(value[key], list)]
+        if invalid_arrays:
+            raise SemanticOutputError(
+                [{"path": [key], "type": "list_type"} for key in invalid_arrays]
+            )
+        # One lossless shape repair: a nonempty attribute string is one item.
+        # Dicts/null/mixed lists remain errors; never replace them with [].
+        repairs = []
+        entities = value.get("entities")
+        if isinstance(entities, list):
+            for index, entity in enumerate(entities):
+                if isinstance(entity, dict) and isinstance(
+                    entity.get("attributes"), str
+                ):
+                    entity["attributes"] = [entity["attributes"]]
+                    repairs.append(
+                        {
+                            "path": ["entities", index, "attributes"],
+                            "code": "string_to_singleton",
+                        }
+                    )
+        result = checked_result(text, value)
+        result["schema_repairs"] = repairs
+        return result
     except ValidationError as error:
         raise SemanticOutputError(safe_validation_fields(error)) from None
     except (json.JSONDecodeError, TypeError, AttributeError):
@@ -163,7 +203,9 @@ claims:[{quote,start,end,subject,topic}], topics:[字符串],
 brand_signals:[{name,quote,start,end,recommendation,explicit_rank,reason_level}]。
 kind只能是brand/organization/product/person/other；sentiment为positive/neutral/negative/unknown。
 quote必须原文逐字片段，name必须出现在quote，start/end是Python Unicode字符位置，end不含边界。
-entities/claims/topics 必须为数组；start/end 必须为整数。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。
+顶层必须完整包含 entities、claims、topics、brand_signals 四个数组，没有内容也必须显式返回空数组，不能省略。
+attributes 必须为字符串数组，例如 ["多门店权限","适用范围待核实"]；没有属性返回 []，禁止对象、null或单个字符串。每项最多1000字符，最多20项。
+start/end 必须为整数，不能使用字符串或布尔值。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。
 没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。
 brand_signals仅提取品牌、组织、产品在当前片段的选择/推荐信号，包含所有发现的品牌而非指定名单。
 recommendation为0明确不推荐、1仅提及、2备选、3明确推荐、4优先推荐；无法判断用null，不由正面情感推断推荐。

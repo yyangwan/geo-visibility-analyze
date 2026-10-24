@@ -7,11 +7,14 @@ import signal
 import socket
 from uuid import uuid4
 
+import httpx
+
 from app.config import settings
 from app.database import async_session
 from app.intelligence.blob import configured_store
 from app.intelligence.monitor import WorkerMonitor
 from app.intelligence.pipeline import Pipeline
+from app.intelligence.provider_failures import classify_provider_status
 from app.intelligence.queue import JobQueue, LeaseLost
 
 logger = logging.getLogger("intelligence.worker")
@@ -37,6 +40,19 @@ async def execute(queue, pipeline, lease):
         await work
     except LeaseLost:
         logger.warning("lease_lost job=%s", lease.id)
+    except httpx.HTTPStatusError as error:
+        if lease.kind != "analyze_run":
+            code, retryable = "HTTPStatusError", True
+        else:
+            failure = classify_provider_status(error.response.status_code)
+            code, retryable = failure.code, failure.retryable
+        logger.error("job_error job=%s code=%s", lease.id, code)
+        try:
+            # Permanent billing/configuration errors require intervention, not
+            # automatic repeats. Saved inputs/checkpoints remain available.
+            await queue.fail(lease, code, retry=retryable)
+        except LeaseLost:
+            pass
     except Exception as error:
         # Never log URLs, model response bodies, auth headers, or source text.
         logger.error("job_error job=%s class=%s", lease.id, type(error).__name__)
