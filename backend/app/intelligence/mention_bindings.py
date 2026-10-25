@@ -67,14 +67,11 @@ def binding_key(mention, segment):
     )
 
 
-async def binding_snapshot(db, project_id):
-    rows = (
-        await db.scalars(
-            select(MentionBindingEvent)
+async def binding_snapshot(db, project_id, *, lock=False):
+    query = (select(MentionBindingEvent)
             .where(MentionBindingEvent.project_id == project_id)
-            .order_by(MentionBindingEvent.binding_key, MentionBindingEvent.version)
-        )
-    ).all()
+            .order_by(MentionBindingEvent.binding_key, MentionBindingEvent.version))
+    rows = (await db.scalars(query.with_for_update().execution_options(populate_existing=True) if lock else query)).all()
     return {
         row.binding_key: {
             "event_id": row.id,

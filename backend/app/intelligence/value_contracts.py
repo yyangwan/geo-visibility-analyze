@@ -206,6 +206,8 @@ class TaskPackV2(Contract):
             raise ValueError("Duplicate AI targets must be merged explicitly")
         if {row.prompt_hash for row in self.delivery.questions} != {row.prompt_hash for row in self.ai_targets}:
             raise ValueError("Every AI target must retain its original question")
+        if len(set(self.own_fact_ids)) != len(self.own_fact_ids):
+            raise ValueError("Select each own fact exactly once")
         return self
 
     def task_key(self):

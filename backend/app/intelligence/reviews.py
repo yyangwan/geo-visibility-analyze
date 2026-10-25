@@ -162,14 +162,11 @@ async def evidence_material(db, run, evidence):
     return source, citation, proof
 
 
-async def review_snapshot(db, project_id, run_id):
-    rows = (
-        await db.scalars(
-            select(ClaimReview)
+async def review_snapshot(db, project_id, run_id, *, lock=False):
+    query = (select(ClaimReview)
             .where(ClaimReview.project_id == project_id, ClaimReview.run_id == run_id)
-            .order_by(ClaimReview.version)
-        )
-    ).all()
+            .order_by(ClaimReview.version))
+    rows = (await db.scalars(query.with_for_update().execution_options(populate_existing=True) if lock else query)).all()
     return {
         row.evidence_id: {
             "id": row.id,

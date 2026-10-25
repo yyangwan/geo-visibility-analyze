@@ -81,13 +81,14 @@ def preference_projection(context):
     return {"mode": "custom" if values else "neutral", "context_version": (context or {}).get("version", 0), "priority_policy_version": f"scenario-priority-v1:{(context or {}).get('version', 0)}:{(context or {}).get('content_hash', 'neutral')}", "importance": {key: values.get(key, 50) for key in SCENARIOS}, "reason": preferences.get("reason"), "taxonomy": SCENARIOS, "score_weights_changed": False}
 
 
-async def context_snapshot(db, project_id):
-    event = await db.scalar(
+async def context_snapshot(db, project_id, *, lock=False):
+    query = (
         select(ProjectContextEvent)
         .where(ProjectContextEvent.project_id == project_id)
         .order_by(ProjectContextEvent.version.desc())
         .limit(1)
     )
+    event = await db.scalar(query.with_for_update().execution_options(populate_existing=True) if lock else query)
     return (
         {
             "version": event.version,

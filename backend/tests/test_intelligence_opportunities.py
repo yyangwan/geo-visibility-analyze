@@ -638,13 +638,17 @@ async def test_opportunity_read_and_plan_preserve_frozen_pack_and_block_v2_draft
     with pytest.raises(HTTPException) as immutable:
         await persist_diagnoses(db_session, stored, altered)
     assert immutable.value.status_code == 409
-    action = await create_plan(
-        db_session,
-        stored,
-        PlanRequest(diagnosisId=diagnosis.id, idempotencyKey="opportunity-plan"),
-        "reviewer",
-    )
-    assert action.target["task_pack"] == diagnosis.payload["task_pack"]
+    # This rule fixture has synthetic owner IDs and is not the stored Run's
+    # evidence. Structural validity must no longer authorize an ActionPlan.
+    with pytest.raises(HTTPException) as wrong_provenance:
+        await create_plan(
+            db_session,
+            stored,
+            PlanRequest(diagnosisId=diagnosis.id, idempotencyKey="opportunity-plan"),
+            "reviewer",
+        )
+    assert wrong_provenance.value.status_code == 409
+    action = SimpleNamespace(target=diagnosis.payload)
     with pytest.raises(HTTPException) as blocked:
         await authorize_draft(db_session, action, stored, None, "reviewer")
     assert blocked.value.status_code == 409 and stored.summary == original

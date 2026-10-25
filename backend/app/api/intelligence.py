@@ -550,6 +550,13 @@ async def retract_fact(
     return await fact_view(db, new)
 
 
+from app.intelligence.action_revisions import (
+    RevisionRequest,
+    current_revision,
+    revise_plan,
+    revision_changes,
+    revision_history,
+)
 from app.intelligence.actions import (
     ApprovalRequest,
     PlanRequest,
@@ -557,7 +564,7 @@ from app.intelligence.actions import (
     create_plan,
     plan_view,
 )
-from app.intelligence.models import ActionPlan
+from app.intelligence.models import ActionPlan, ActionPlanRevision
 
 
 async def action_run(db, user, run_id):
@@ -590,11 +597,46 @@ async def list_action_plans(
     actions = (
         await db.scalars(
             select(ActionPlan)
-            .where(ActionPlan.project_id == run.project_id, ActionPlan.run_id == run.id)
+            .join(ActionPlanRevision, (ActionPlanRevision.project_id == ActionPlan.project_id)
+                  & (ActionPlanRevision.action_id == ActionPlan.id) & (ActionPlanRevision.revision == ActionPlan.revision))
+            .where(ActionPlan.project_id == run.project_id, ActionPlanRevision.run_id == run.id)
             .order_by(ActionPlan.created_at)
         )
     ).all()
     return {"actions": [await plan_view(db, action, run) for action in actions]}
+
+
+async def scoped_action(db, user, action_id):
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    return action
+
+
+@router.get("/actions/{action_id}")
+async def action_detail(action_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action = await scoped_action(db, user, action_id)
+    _, run = await current_revision(db, action)
+    return await plan_view(db, action, run)
+
+
+@router.get("/actions/{action_id}/revisions")
+async def action_revision_history(action_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+                                  user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action = await scoped_action(db, user, action_id)
+    return {"action_id": action.id, "current_revision": action.revision, "offset": offset, "limit": limit,
+            "revisions": await revision_history(db, action, offset, limit)}
+
+
+@router.post("/actions/{action_id}/revisions", status_code=202)
+async def create_action_revision(action_id: str, data: RevisionRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action_writer(user)
+    action = await scoped_action(db, user, action_id)
+    row = await revise_plan(db, action, data, str(user["sub"]))
+    await db.commit()
+    _, run = await current_revision(db, action)
+    return {"created_revision": row.revision, "revision_id": row.id, "changes_from_previous": await revision_changes(db, row), "action": await plan_view(db, action, run)}
 
 
 @router.post("/runs/{run_id}/actions", status_code=202)
@@ -629,7 +671,7 @@ async def approve_action_plan(
     )
     if action is None:
         raise HTTPException(404, "Action not found")
-    run = await action_run(db, user, action.run_id)
+    _, run = await current_revision(db, action)
     await approve_plan(db, action, run, data, str(user["sub"]), user["role"])
     await db.commit()
     return await plan_view(db, action, run)

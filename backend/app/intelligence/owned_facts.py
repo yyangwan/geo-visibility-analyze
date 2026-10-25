@@ -181,9 +181,9 @@ async def approve_owned_fact(db, asset, data, actor, blobs=None):
     return fact
 
 
-async def owned_fact_fresh(db, fact, *, read=False, blobs=None):
-    asset = await get_asset(db, fact.project_id, fact.owned_asset_revision_id)
-    if not await owned_material_fresh(db, asset):
+async def owned_fact_fresh(db, fact, *, read=False, blobs=None, lock=False):
+    asset = await get_asset(db, fact.project_id, fact.owned_asset_revision_id, lock=lock)
+    if not await owned_material_fresh(db, asset, lock=lock):
         return False
     try:
         source = TypeAdapter(FactSource).validate_python(fact.source_ref)
@@ -278,16 +278,15 @@ async def withdraw_owned_fact(db, fact, data, actor):
     return new
 
 
-async def fact_status(db, fact, fresh, *, now=None):
+async def fact_status(db, fact, fresh, *, now=None, lock=False):
     now = now or utcnow()
-    latest = await db.scalar(
-        select(BrandFact.id)
+    query = (select(BrandFact.id)
         .where(
             BrandFact.project_id == fact.project_id, BrandFact.fact_key == fact.fact_key
         )
         .order_by(BrandFact.version.desc())
-        .limit(1)
-    )
+        .limit(1))
+    latest = await db.scalar(query.with_for_update() if lock else query)
     status = "superseded" if latest != fact.id else fact.state
     if status == "approved":
         status = (

@@ -340,7 +340,8 @@ async def test_human_review_change_invalidates_existing_plan_approval(db_session
     run, evidence, _, source = await fixture_evidence(db_session)
     summary = {
         "diagnoses": [
-            {"id": "f" * 64, "platform": "qwen", "action": {"task": "核实质保范围"}}
+            {"id": "f" * 64, "platform": "qwen", "evidence_ids": [evidence.id],
+             "source_ids": [evidence.citation_id], "action": {"task": "核实质保范围"}}
         ]
     }
     await persist_diagnoses(db_session, run, summary)

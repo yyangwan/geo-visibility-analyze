@@ -29,14 +29,11 @@ class IdentityDecision(BaseModel):
     )
 
 
-async def identity_snapshot(db, project_id):
-    rows = (
-        await db.scalars(
-            select(EntityResolutionEvent)
+async def identity_snapshot(db, project_id, *, lock=False):
+    query = (select(EntityResolutionEvent)
             .where(EntityResolutionEvent.project_id == project_id)
-            .order_by(EntityResolutionEvent.entity_id, EntityResolutionEvent.version)
-        )
-    ).all()
+            .order_by(EntityResolutionEvent.entity_id, EntityResolutionEvent.version))
+    rows = (await db.scalars(query.with_for_update().execution_options(populate_existing=True) if lock else query)).all()
     return {
         row.entity_id: {
             "event_id": row.id,

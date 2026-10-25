@@ -1,6 +1,7 @@
 """The real job row lock must serialize reservations without exceeding its cap."""
 
 import asyncio
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -11,7 +12,7 @@ from app.intelligence.ingestion import prepare_run
 from app.intelligence.model_budget import budget_status
 from app.intelligence.models import AnalysisJob, IntelligenceRun
 from app.intelligence.pipeline import Pipeline
-from app.intelligence.queue import JobQueue, LeaseLost
+from app.intelligence.queue import JobQueue, Lease, LeaseLost, db_now
 from app.models.models import Audit, PlatformResponseRecord, Prompt
 from tests.test_intelligence_foundation import fixture_audit
 from tests.test_intelligence_mysql import MYSQL_URL, mysql_sessions  # noqa: F401
@@ -35,10 +36,34 @@ async def test_concurrent_reservations_share_one_frozen_budget_and_stale_settlem
             audit = await fixture_audit(db, project=project)
             audit_id = audit.id
             run = await prepare_run(db, project, audit.id)
+            # Reserve only this fixture's row. A global queue claim may validly
+            # select another CI project's pending work on a reused local database.
+            job = await db.scalar(
+                select(AnalysisJob)
+                .where(AnalysisJob.project_id == project, AnalysisJob.run_id == run.id)
+                .with_for_update()
+            )
+            job.status, job.lease_owner, job.lease_token, job.lease_version = (
+                "leased",
+                "budget-worker",
+                uuid4().hex,
+                1,
+            )
+            job.lease_until, job.attempt = await db_now(db) + timedelta(seconds=180), 1
+            lease = Lease(
+                job.id,
+                project,
+                job.lease_owner,
+                job.lease_token,
+                1,
+                job.kind,
+                job.subject_id,
+                job.payload,
+                run.id,
+            )
             await db.commit()
             run_id = run.id
         queue = JobQueue(sessions, "budget-worker")
-        lease = await queue.claim()
         assert lease.run_id == run_id
         pipeline = Pipeline(queue, None)
 

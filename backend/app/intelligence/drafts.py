@@ -225,6 +225,9 @@ async def authorize_draft(db, action, run, data, actor):
         )
     if not (await plan_view(db, action, run))["approval_valid"]:
         raise HTTPException(409, "Current investigation plan approval required")
+    from app.intelligence.action_revisions import current_revision
+
+    revision, _ = await current_revision(db, action)
     facts = await selected_facts(db, action, run, data.fact_ids)
     expiry = data.expires_at.astimezone(UTC).replace(tzinfo=None)
     if (
@@ -240,6 +243,7 @@ async def authorize_draft(db, action, run, data, actor):
     if not fresh:
         raise HTTPException(409, "Draft evidence stale")
     payload = {
+        "_action_revision": {"id": revision.id, "revision": revision.revision, "signature": revision.signature},
         "schemaVersion": 2,
         "projectId": run.project_id,
         "runId": run.id,
@@ -299,7 +303,7 @@ def parse_utc(value):
 
 def grant_payload(grant):
     return {
-        **grant.payload,
+        **{key: value for key, value in grant.payload.items() if key != "_action_revision"},
         "approval": {
             "id": grant.id,
             "version": grant.version,
@@ -311,6 +315,11 @@ def grant_payload(grant):
 
 
 async def export_brief(db, grant, action, run):
+    from app.intelligence.action_revisions import current_revision
+
+    revision, _ = await current_revision(db, action)
+    if grant.payload.get("_action_revision") != {"id": revision.id, "revision": revision.revision, "signature": revision.signature}:
+        raise HTTPException(409, "Content draft belongs to a different action revision")
     # Export is read-only: missing context must not be silently created by a GET.
     state = await db.scalar(
         select(AuditIntelligenceState).where(
