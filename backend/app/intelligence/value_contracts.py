@@ -28,10 +28,10 @@ class Contract(BaseModel):
 
 class EvidenceRef(Contract):
     project_id: Id
-    run_id: Id
+    run_id: Id | None = None
     owner_kind: Literal["answer", "citation", "snapshot", "owned_asset"]
     owner_id: Id
-    segment_id: Id
+    segment_id: Id | None = None
     text_hash: Hash
     quote: str = Field(min_length=1, max_length=2000)
     start: StrictInt = Field(ge=0)
@@ -41,6 +41,8 @@ class EvidenceRef(Contract):
     def coherent_span(self):
         if self.end - self.start != len(self.quote):
             raise ValueError("Evidence uses exact Unicode offsets")
+        if self.owner_kind != "owned_asset" and (not self.run_id or not self.segment_id):
+            raise ValueError("Observed evidence requires its actual run and segment")
         return self
 
 
@@ -72,6 +74,8 @@ class OwnedAssetSource(Contract):
             raise ValueError(
                 "Owned facts need owned-asset evidence, not a fake citation"
             )
+        if self.evidence.owner_id != self.asset_id:
+            raise ValueError("Owned evidence must belong to this material revision")
         return self
 
 

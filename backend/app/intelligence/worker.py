@@ -21,7 +21,7 @@ logger = logging.getLogger("intelligence.worker")
 
 
 async def execute(queue, pipeline, lease):
-    if lease.kind not in ("fetch_document", "analyze_run", "refresh_run"):
+    if lease.kind not in ("fetch_document", "fetch_owned_asset", "analyze_run", "refresh_run"):
         await queue.fail(lease, "unsupported_job_kind", retry=False)
         return
 

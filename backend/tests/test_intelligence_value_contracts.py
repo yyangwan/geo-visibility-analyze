@@ -134,7 +134,7 @@ def test_owned_fact_source_requires_no_fabricated_citation_review():
         "asset_id": "asset1",
         "asset_revision": 1,
         "verification_id": "verify1",
-        "evidence": evidence(owner_kind="owned_asset"),
+        "evidence": evidence(owner_kind="owned_asset", owner_id="asset1", run_id=None, segment_id=None),
     }
     assert adapter.validate_python(value).kind == "owned_asset_revision"
     with pytest.raises(ValidationError):

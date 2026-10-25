@@ -348,6 +348,7 @@ async def prepare_run(
     from app.intelligence.identity import identity_snapshot
     from app.intelligence.mention_bindings import binding_snapshot, split_snapshot
     from app.intelligence.model_budget import freeze_run_budget
+    from app.intelligence.owned_assets import material_snapshot
     from app.intelligence.project_context import context_snapshot
     from app.intelligence.reviews import fact_snapshot
 
@@ -359,6 +360,7 @@ async def prepare_run(
         "entity_splits": await split_snapshot(db, project_id),
         "entity_resolutions": await identity_snapshot(db, project_id),
         "approved_facts": await fact_snapshot(db, project_id),
+        "owned_asset_revisions": await material_snapshot(db, project_id),
         "responses": frozen_responses,
         "sources": sources,
         "brands": brand_context["brands"] if brand_context else audit.brands_json or [],

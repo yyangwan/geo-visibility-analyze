@@ -4,7 +4,14 @@ from datetime import UTC
 from typing import Literal
 
 from fastapi import HTTPException
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -24,6 +31,7 @@ from app.intelligence.models import (
 from app.intelligence.project_context import context_snapshot
 from app.intelligence.refresh import request_refresh, state_for_audit
 from app.intelligence.semantics import stable_hash
+from app.intelligence.value_contracts import FactSource
 from app.utils.timezone import utc_isoformat, utcnow
 
 
@@ -242,6 +250,12 @@ async def fact_snapshot(db, project_id):
             "state": row.state,
             "entity_id": row.entity_id,
             "review_id": row.review_id,
+            "source_kind": row.source_kind,
+            "target_id": row.target_id,
+            "registry_brand_id": row.registry_brand_id,
+            "owned_asset_revision_id": row.owned_asset_revision_id,
+            "owned_asset_version": row.owned_asset_version,
+            "source_ref": row.source_ref,
             "statement": row.statement,
             "scope": row.scope,
             "valid_from": utc_isoformat(row.valid_from),
@@ -360,6 +374,7 @@ async def approve_fact(db, run, data, actor):
         actor_id=actor,
         idempotency_key=data.idempotency_key,
         request_hash=request_hash,
+        source_ref=await citation_fact_source(db, run, evidence, review),
     )
     await add_event(db, fact)
     await request_refresh(
@@ -429,6 +444,10 @@ async def withdraw_fact(db, run, fact, data, actor):
 
 
 async def fact_view(db, fact):
+    from app.intelligence.owned_facts import fact_status, owned_fact_fresh
+
+    if fact.source_kind == "owned_asset_revision":
+        return await fact_status(db, fact, await owned_fact_fresh(db, fact), now=utcnow())
     review = await db.scalar(
         select(ClaimReview).where(
             ClaimReview.project_id == fact.project_id, ClaimReview.id == fact.review_id
@@ -481,36 +500,23 @@ async def fact_view(db, fact):
         and identity["event_id"] == fact.identity_event_id
         and identity["decision"] == "confirmed"
     )
-    status = fact.state
-    latest_fact_id = await db.scalar(
-        select(BrandFact.id)
-        .where(
-            BrandFact.project_id == fact.project_id, BrandFact.fact_key == fact.fact_key
-        )
-        .order_by(BrandFact.version.desc())
-        .limit(1)
-    )
-    if latest_fact_id != fact.id:
-        status = "superseded"
-    if status == "approved":
-        status = (
-            "needs_review"
-            if not fresh
-            else "expired"
-            if fact.valid_until <= utcnow()
-            else "scheduled"
-            if fact.valid_from > utcnow()
-            else "valid"
-        )
-    return {
-        "id": fact.id,
-        "fact_key": fact.fact_key,
-        "version": fact.version,
-        "entity_id": fact.entity_id,
-        "statement": fact.statement,
-        "scope": fact.scope,
-        "status": status,
-        "review_id": fact.review_id,
-        "valid_from": utc_isoformat(fact.valid_from),
-        "valid_until": utc_isoformat(fact.valid_until),
-    }
+    return await fact_status(db, fact, fresh, now=utcnow())
+
+
+async def citation_fact_source(db, run, evidence, review):
+    source, citation, proof = await evidence_material(db, run, evidence)
+    if proof != review.evidence_hash or review.relation != "supports":
+        raise HTTPException(409, "Reviewed source no longer valid")
+    start = source.text.find(review.source_quote)
+    if start < 0 or source.text.find(review.source_quote, start + 1) >= 0:
+        raise HTTPException(422, "Choose a uniquely located source quotation")
+    snapshot = await db.get(SourceSnapshot, source.owner_id)
+    return TypeAdapter(FactSource).validate_python({
+        "kind": "citation_review", "review_id": review.id, "evidence_id": evidence.id,
+        "citation_id": citation["id"], "snapshot_id": source.owner_id,
+        "evidence": {"project_id": run.project_id, "run_id": run.id,
+                     "owner_kind": "snapshot", "owner_id": source.owner_id,
+                     "segment_id": source.id, "text_hash": snapshot.body_hash,
+                     "quote": review.source_quote, "start": source.start_offset + start,
+                     "end": source.start_offset + start + len(review.source_quote)},
+    }).model_dump()

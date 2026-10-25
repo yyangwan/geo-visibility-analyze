@@ -69,6 +69,11 @@ class Pipeline:
         self.verify = verify
         self.contextualize = contextualize
 
+    async def fetch_owned_asset(self, lease):
+        from app.intelligence.owned_assets import fetch_owned_asset
+
+        await fetch_owned_asset(self, lease)
+
     async def reserve_model_request(
         self, lease, *, phase, messages, max_output, subject_id
     ):

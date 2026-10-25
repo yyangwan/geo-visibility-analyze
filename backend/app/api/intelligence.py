@@ -533,6 +533,12 @@ async def retract_fact(
     )
     if fact is None:
         raise HTTPException(404, "Fact not found")
+    if fact.source_kind == "owned_asset_revision":
+        from app.intelligence.owned_facts import withdraw_owned_fact
+
+        new = await withdraw_owned_fact(db, fact, data, str(user["sub"]))
+        await db.commit()
+        return await fact_view(db, new)
     review = await db.scalar(
         select(ClaimReview).where(
             ClaimReview.project_id == fact.project_id, ClaimReview.id == fact.review_id
@@ -1299,3 +1305,8 @@ async def saved_measurement_history(
     return await measurement_history(
         db, project_id, cohort_id, utcnow() - timedelta(days=history_days)
     )
+
+
+from app.api.intelligence_owned import router as owned_router
+
+router.include_router(owned_router)

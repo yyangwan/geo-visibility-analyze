@@ -10,7 +10,17 @@ from app.intelligence.models import (
 
 
 async def terminal_job(db, job):
-    if job.kind == "fetch_document":
+    if job.kind == "fetch_owned_asset":
+        from app.intelligence.models import OwnedContentAsset
+        from app.intelligence.owned_assets import notify_project
+
+        asset = await db.scalar(select(OwnedContentAsset).where(
+            OwnedContentAsset.project_id == job.project_id, OwnedContentAsset.id == job.subject_id))
+        if asset and asset.status != "captured":
+            asset.status = "failed"
+            asset.verification = {**asset.verification, "error_code": job.error_code}
+            await notify_project(db, job.project_id, "owned_material_terminal", job.id)
+    elif job.kind == "fetch_document":
         captured = await db.scalar(
             select(SourceFetch)
             .where(

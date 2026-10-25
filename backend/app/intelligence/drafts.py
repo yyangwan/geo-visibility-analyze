@@ -129,6 +129,8 @@ async def selected_facts(db, action, run, ids):
             raise HTTPException(404, "Fact outside project")
         if (await fact_view(db, fact))["status"] != "valid":
             raise HTTPException(409, "Fact no longer valid")
+        if fact.source_kind == "owned_asset_revision":
+            raise HTTPException(409, "Owned-material facts require EvidenceBrief v3 capability")
         review = await db.scalar(
             select(ClaimReview).where(
                 ClaimReview.project_id == run.project_id,
