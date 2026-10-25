@@ -47,6 +47,12 @@ def task(**changes):
         "fact_change_key": "role-boundary",
         "intent": "website_update",
         "deliverable": "更新角色权限表并注明适用范围",
+        "delivery": {
+            "asset_title": "角色权限表", "asset_kind": "new_deliverable",
+            "audience_status": "unknown", "outline": ["核对角色权限范围", "补充逐项事实依据"],
+            "channel": "own_website", "channel_reason": "为目标问题提供可核对的自有资料",
+            "questions": [{"prompt_hash": "a" * 64, "text": "如何选择门店权限工具"}],
+        },
         "acceptance": ["每项主张具有批准事实"],
         "ai_targets": [
             {

@@ -187,6 +187,8 @@ async def selected_facts(db, action, run, ids):
 
 
 async def authorize_draft(db, action, run, data, actor):
+    if action.target.get("task_pack"):
+        raise HTTPException(409, "TaskPack v2 requires EvidenceBrief v3; do not flatten its original targets")
     state = await state_for_audit(db, run.project_id, run.audit_id)
     request_hash = stable_hash([action.id, data.model_dump(mode="json"), actor])
     previous = await db.scalar(

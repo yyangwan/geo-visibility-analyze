@@ -314,6 +314,7 @@ def analysis_signature(model: str, base_url: str) -> str:
     from app.intelligence.evidence import SYSTEM as evidence_system
     from app.intelligence.model_policy import VERSION as model_policy_version
     from app.intelligence.model_policy import structured_options
+    from app.intelligence.opportunity_tasks import VERSION as opportunity_version
 
     return stable_hash(
         {
@@ -326,6 +327,7 @@ def analysis_signature(model: str, base_url: str) -> str:
             "prompt": SYSTEM,
             "evidence_prompt": evidence_system,
             "evidence_policy": EVIDENCE_POLICY,
+            "opportunity_policy": opportunity_version,
             "diagnosis_policy": DIAGNOSIS_VERSION,
             "model_request_policy": {
                 "version": model_policy_version,

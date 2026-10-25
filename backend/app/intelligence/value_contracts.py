@@ -1,7 +1,7 @@
 """Value-workflow contracts. Structural validation is not evidence authorization.
 
-These contracts are not wired into customer endpoints until their workflows are
-implemented. They freeze the shared meaning of targets, provenance and revisions.
+Contracts are wired incrementally as workflows land. Structural validity never
+grants identity, fact approval or publication rights.
 """
 
 from typing import Annotated, Literal
@@ -146,6 +146,33 @@ class ActionTarget(Contract):
     ] = Field(min_length=1)
 
 
+class TaskQuestion(Contract):
+    prompt_hash: Hash
+    text: str = Field(min_length=1, max_length=200000)
+
+
+class DeliverySpec(Contract):
+    asset_title: str = Field(min_length=1, max_length=500)
+    asset_kind: Literal["existing_material", "new_deliverable"]
+    material_revision_id: Id | None = None
+    material_version: StrictInt | None = Field(default=None, ge=1)
+    reference_url: str | None = Field(default=None, max_length=4096)
+    audience: tuple[str, ...] = Field(default=(), max_length=20)
+    audience_status: Literal["reviewed_prompt", "unknown"]
+    outline: tuple[Annotated[str, Field(min_length=5, max_length=2000)], ...] = Field(min_length=2, max_length=20)
+    channel: Literal["own_website", "material_library", "reference_publisher"]
+    channel_reason: str = Field(min_length=5, max_length=2000)
+    questions: tuple[TaskQuestion, ...] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def consistent_asset(self):
+        if self.asset_kind == "existing_material" and not (self.material_revision_id and self.material_version) or self.asset_kind == "new_deliverable" and (self.material_revision_id is not None or self.material_version is not None):
+            raise ValueError("Existing material requires its actual frozen revision")
+        if len({row.prompt_hash for row in self.questions}) != len(self.questions):
+            raise ValueError("Keep each original question exactly once")
+        return self
+
+
 class TaskPackV2(Contract):
     version: Literal["task-pack-v2"] = "task-pack-v2"
     project_id: Id
@@ -161,12 +188,13 @@ class TaskPackV2(Contract):
         "material_verification",
     ]
     deliverable: str = Field(min_length=5, max_length=2000)
+    delivery: DeliverySpec
     acceptance: tuple[Annotated[str, Field(min_length=5, max_length=1000)], ...] = (
         Field(min_length=1, max_length=30)
     )
     ai_targets: tuple[ActionTarget, ...] = Field(min_length=1, max_length=100)
     diagnostic_evidence: tuple[EvidenceRef, ...] = Field(min_length=1, max_length=100)
-    own_fact_ids: tuple[Id, ...] = ()
+    own_fact_ids: tuple[Id, ...] = Field(default=(), max_length=100)
     missing_materials: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -176,6 +204,8 @@ class TaskPackV2(Contract):
         keys = [(t.platform, t.prompt_hash, t.scenario_id) for t in self.ai_targets]
         if len(set(keys)) != len(keys):
             raise ValueError("Duplicate AI targets must be merged explicitly")
+        if {row.prompt_hash for row in self.delivery.questions} != {row.prompt_hash for row in self.ai_targets}:
+            raise ValueError("Every AI target must retain its original question")
         return self
 
     def task_key(self):

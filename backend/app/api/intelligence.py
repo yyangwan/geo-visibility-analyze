@@ -727,6 +727,34 @@ async def get_source_observations(
             "content_family_coverage": projection.get("content_family_coverage")}
 
 
+@router.get("/runs/{run_id}/opportunities")
+async def get_opportunities(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    priority: str = Query("frozen", pattern=r"^(frozen|current)$"),
+    own_target_id: str | None = Query(None, max_length=200),
+    platform: str | None = Query(None, max_length=50),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("opportunities", {})
+    rows = projection.get("items", [])
+    policy = projection.get("policy")
+    current_context = None
+    if priority == "current":
+        from app.intelligence.opportunity_tasks import rank_opportunities
+
+        current_context = await context_snapshot(db, run.project_id)
+        rows, policy = rank_opportunities(rows, current_context)
+    filtered = [row for row in rows if (own_target_id is None or row["own_target_id"] == own_target_id)
+                and (platform is None or platform in row["platforms"])]
+    return {**{key: value for key, value in projection.items() if key not in ("items", "policy")},
+            "policy": policy, "ranking_scope": priority, "frozen_run_unchanged": True,
+            "ranking_only_not_evidence_refresh": priority == "current",
+            "registry_context_changed": priority == "current" and (current_context or {}).get("brands", []) != (run.manifest.get("brand_context") or {}).get("brands", []),
+            "items": filtered[offset:offset + limit], "total": len(filtered),
+            "next_offset": offset + limit if offset + limit < len(filtered) else None}
+
+
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
 async def review_identity(
     run_id: str,

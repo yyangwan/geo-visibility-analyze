@@ -72,6 +72,7 @@ def project_report(run, snapshot, fresh, reviews):
         "snapshot_current": fresh,
         "coverage": run.coverage,
         "source_observations": run.summary.get("source_observations"),
+        "opportunities": run.summary.get("opportunities"),
         "entities": entities,
         "platforms": platforms,
         "diagnoses": run.summary.get("diagnoses", []),

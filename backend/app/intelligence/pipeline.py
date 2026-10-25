@@ -971,6 +971,7 @@ async def build_summary(db, run):
             "method": row.method,
             "citation_id": row.citation_id,
             "source_segment_id": row.source_segment_id,
+            "answer_segment_id": row.answer_segment_id,
             "snapshot_id": sources_by_id[row.citation_id]["snapshot_id"],
             "source_title": sources_by_id[row.citation_id]["title"],
             "source_url": sources_by_id[row.citation_id]["url"],
@@ -1044,7 +1045,8 @@ async def build_summary(db, run):
         summary["brand_evaluation"],
     )
     summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
-    from app.intelligence.competitive_actions import competitive_diagnoses
+    from app.intelligence.opportunities import build_opportunities
 
-    summary["diagnoses"].extend(competitive_diagnoses(run, summary))
+    summary["opportunities"] = build_opportunities(run, summary, applications)
+    summary["diagnoses"].extend(summary["opportunities"]["items"])
     return coverage, summary

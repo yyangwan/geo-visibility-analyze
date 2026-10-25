@@ -44,7 +44,7 @@ class ApprovalRequest(BaseModel):
 
 async def persist_diagnoses(db, run, summary):
     for diagnosis in summary.get("diagnoses", []):
-        if not diagnosis.get("id") or not diagnosis.get("action"):
+        if not diagnosis.get("id") or not diagnosis.get("action") and not diagnosis.get("task_key"):
             continue
         record = await db.scalar(
             select(PlatformDiagnosis).where(
@@ -62,6 +62,11 @@ async def persist_diagnoses(db, run, summary):
             )
             db.add(record)
             await db.flush()
+        elif diagnosis.get("task_key"):
+            frozen = {key: value for key, value in record.payload.items() if key != "record_id"}
+            candidate = {key: value for key, value in diagnosis.items() if key != "record_id"}
+            if stable_hash(frozen) != stable_hash(candidate):
+                raise HTTPException(409, "Published opportunity is immutable; create a new Run revision")
         diagnosis["record_id"] = record.id
 
 
@@ -124,7 +129,23 @@ async def create_plan(db, run, data, actor):
         )
     )
     if diagnosis is None or not diagnosis.payload.get("action"):
+        if diagnosis and diagnosis.payload.get("task_key"):
+            raise HTTPException(409, "Opportunity is not actionable; inspect scope and task contract")
         raise HTTPException(404, "Diagnosis not in this run")
+    if diagnosis.payload.get("task_key"):
+        from pydantic import ValidationError
+
+        from app.intelligence.value_contracts import TaskPackV2
+
+        try:
+            pack = TaskPackV2.model_validate(diagnosis.payload["task_pack"])
+            valid = (pack.project_id == run.project_id and pack.task_key() == diagnosis.payload["task_key"]
+                     and pack.revision_signature() == diagnosis.payload["task_signature"]
+                     and all(ref.run_id == run.id for ref in pack.diagnostic_evidence))
+        except (ValidationError, KeyError):
+            valid = False
+        if not valid:
+            raise HTTPException(409, "Frozen task package integrity changed")
     previous = await db.scalar(
         select(ActionPlan)
         .where(
