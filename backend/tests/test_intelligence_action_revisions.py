@@ -563,19 +563,19 @@ async def test_selected_own_fact_withdrawal_invalidates_only_related_task(
 
 
 @pytest.mark.asyncio
-async def test_old_draft_does_not_revive_after_new_plan_is_approved(db_session):
+async def test_old_draft_does_not_revive_after_new_plan_is_approved(db_session, tmp_path, monkeypatch):
     from app.intelligence.drafts import authorize_draft, export_brief
     from tests.test_intelligence_drafts import fixture_draft
 
-    _, run, action, _, request = await fixture_draft(db_session)
+    _, run, action, _, request = await fixture_draft(db_session, tmp_path, monkeypatch)
     grant = await authorize_draft(db_session, action, run, request, "reviewer")
     await db_session.commit()
-    await revise_plan(db_session, action, revision_request(), "owner")
+    await revise_plan(db_session, action, revision_request(expectedRevision=2), "owner")
     await approve_plan(
         db_session,
         action,
         run,
-        approval_request(2, "approve-revised-draft-plan"),
+        approval_request(3, "approve-revised-draft-plan"),
         "owner",
         "owner",
     )
@@ -654,9 +654,15 @@ async def test_same_snapshot_fetch_is_stable_and_changed_related_source_is_stale
     db_session,
 ):
     from app.intelligence.models import SourceFetch, SourceSnapshot
-    from tests.test_intelligence_drafts import fixture_draft
+    from tests.test_intelligence_reviews import fixture_evidence
 
-    _, run, action, _, _ = await fixture_draft(db_session)
+    run, evidence, _, _ = await fixture_evidence(db_session)
+    summary = {"diagnoses": [{"id": "a" * 64, "platform": "qwen", "prompt": "核对质保条件",
+        "response_ids": [run.manifest["responses"][0]["id"]], "source_ids": [run.manifest["sources"][0]["id"]],
+        "evidence_ids": [evidence.id], "action": {"task": "核实质保条件原文"}}]}
+    await persist_diagnoses(db_session, run, summary)
+    action = await create_plan(db_session, run, PlanRequest(diagnosisId=summary["diagnoses"][0]["record_id"], idempotencyKey="source-plan-123"), "owner")
+    await approve_plan(db_session, action, run, approval_request(), "owner", "owner")
     source = run.manifest["sources"][0]
     db_session.add(
         SourceFetch(

@@ -9,7 +9,6 @@ from sqlalchemy import select
 
 from app.api.auth import get_current_user
 from app.intelligence.actions import PlanRequest, create_plan, persist_diagnoses
-from app.intelligence.drafts import authorize_draft
 from app.intelligence.ingestion import prepare_run
 from app.intelligence.models import AnalysisJob, PlatformDiagnosis
 from app.intelligence.opportunities import build_opportunities
@@ -648,10 +647,13 @@ async def test_opportunity_read_and_plan_preserve_frozen_pack_and_block_v2_draft
             "reviewer",
         )
     assert wrong_provenance.value.status_code == 409
-    action = SimpleNamespace(target=diagnosis.payload)
-    with pytest.raises(HTTPException) as blocked:
-        await authorize_draft(db_session, action, stored, None, "reviewer")
-    assert blocked.value.status_code == 409 and stored.summary == original
+    from pydantic import ValidationError
+
+    from app.intelligence.brief_contracts import EvidenceBriefV3
+
+    with pytest.raises(ValidationError):
+        EvidenceBriefV3.model_validate({"schemaVersion": 2, "taskPack": diagnosis.payload["task_pack"]})
+    assert stored.summary == original
     app.dependency_overrides[get_current_user] = lambda: {
         "scope": "project",
         "pid": "other",

@@ -190,7 +190,7 @@ def validate_task_edit(seed, edited):
 
 
 async def validate_own_facts(db, run, target, *, require_frozen=False):
-    from app.intelligence.action_dependencies import selected_fact
+    from app.intelligence.fact_qualification import task_fact
 
     pack = (
         TaskPackV2.model_validate(target["task_pack"])
@@ -244,7 +244,7 @@ async def validate_own_facts(db, run, target, *, require_frozen=False):
                 409, "Task platform or reviewed scenario is not in the frozen Run"
             )
     for fact_id in pack.own_fact_ids:
-        fact = await selected_fact(db, run.project_id, fact_id, lock=True)
+        fact = await task_fact(db, run, pack, fact_id, lock=True)
         frozen = next(
             (
                 row
@@ -273,15 +273,7 @@ async def validate_own_facts(db, run, target, *, require_frozen=False):
             raise HTTPException(
                 409, "Diagnosed fact version differs from its frozen input"
             )
-        matches = (
-            fact.get("target_id") == pack.own_target_id
-            if fact.get("source_kind") == "owned_asset_revision"
-            else bool(
-                own.get("binding_entity_id")
-                and fact.get("entity_id") == own["binding_entity_id"]
-            )
-        )
-        if fact.get("status") != "valid" or not matches:
+        if not fact["eligible"]:
             raise HTTPException(
                 409,
                 "Selected fact must be valid and belong to this own brand; approval is not semantic entailment",
@@ -493,7 +485,7 @@ async def revision_history(db, action, offset=0, limit=20):
                 "draft_approval_ids": [
                     grant.id
                     for grant in grants
-                    if (grant.payload.get("_action_revision") or {}).get("id") == row.id
+                    if (grant.payload.get("actionRevision") or {}).get("id") == row.id
                 ],
                 "approval": {
                     "id": approval.id,

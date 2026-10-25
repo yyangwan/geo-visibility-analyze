@@ -24,8 +24,6 @@ from app.intelligence.models import (
     ClaimReview,
     ContentSegment,
     IntelligenceEntity,
-    IntelligenceRun,
-    SourceFetch,
     SourceSnapshot,
 )
 from app.intelligence.project_context import context_snapshot
@@ -453,63 +451,9 @@ async def withdraw_fact(db, run, fact, data, actor):
 
 
 async def fact_view(db, fact):
-    from app.intelligence.owned_facts import fact_status, owned_fact_fresh
+    from app.intelligence.fact_qualification import qualified_fact
 
-    if fact.source_kind == "owned_asset_revision":
-        return await fact_status(db, fact, await owned_fact_fresh(db, fact), now=utcnow())
-    review = await db.scalar(
-        select(ClaimReview).where(
-            ClaimReview.project_id == fact.project_id, ClaimReview.id == fact.review_id
-        )
-    )
-    run = await db.scalar(
-        select(IntelligenceRun).where(
-            IntelligenceRun.project_id == fact.project_id,
-            IntelligenceRun.id == review.run_id,
-        )
-    )
-    latest = (await review_snapshot(db, fact.project_id, run.id)).get(
-        review.evidence_id
-    )
-    identity = (await identity_snapshot(db, fact.project_id)).get(fact.entity_id)
-    evidence = await db.scalar(
-        select(ClaimEvidence).where(
-            ClaimEvidence.project_id == fact.project_id,
-            ClaimEvidence.id == review.evidence_id,
-        )
-    )
-    try:
-        _, citation, proof = await evidence_material(db, run, evidence)
-        fetch = await db.scalar(
-            select(SourceFetch)
-            .where(
-                SourceFetch.project_id == fact.project_id,
-                SourceFetch.audit_id == run.audit_id,
-                SourceFetch.document_id == citation["document_id"],
-            )
-            .order_by(SourceFetch.created_at.desc(), SourceFetch.id.desc())
-            .limit(1)
-        )
-        fresh = proof == review.evidence_hash and (
-            not fetch or fetch.snapshot_id == citation["snapshot_id"]
-        )
-    except HTTPException:
-        fresh = False
-    fresh = (
-        fresh
-        and await context_snapshot(db, fact.project_id)
-        == run.manifest.get("brand_context")
-        and await binding_snapshot(db, fact.project_id)
-        == run.manifest.get("mention_bindings", {})
-        and await alias_snapshot(db, fact.project_id)
-        == run.manifest.get("entity_aliases", {})
-        and latest["id"] == review.id
-        and review.relation == "supports"
-        and identity
-        and identity["event_id"] == fact.identity_event_id
-        and identity["decision"] == "confirmed"
-    )
-    return await fact_status(db, fact, fresh, now=utcnow())
+    return await qualified_fact(db, fact.project_id, fact.id)
 
 
 async def citation_fact_source(db, run, evidence, review):

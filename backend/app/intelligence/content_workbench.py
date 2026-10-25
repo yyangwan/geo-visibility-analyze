@@ -93,7 +93,7 @@ async def content_workbench(db, project_id, cursor=None, approval_id=None):
                 await db.scalar(
                     select(IntelligenceRun).where(
                         IntelligenceRun.project_id == project_id,
-                        IntelligenceRun.id == action.run_id,
+                        IntelligenceRun.id == grant.payload.get("runId"),
                     )
                 )
                 if action
@@ -110,7 +110,8 @@ async def content_workbench(db, project_id, cursor=None, approval_id=None):
                             {"platform": target["platform"], "prompt": target["prompt"]}
                             for target in brief["aiTargets"]
                         ],
-                        fact_count=len(brief["facts"]),
+                        fact_count=len(brief["ownFacts"]),
+                        action_revision=brief["actionRevision"]["revision"],
                     )
                 except HTTPException as error:
                     if error.status_code >= 500:

@@ -12,11 +12,9 @@ from app.intelligence.evaluation_reviews import latest_cohort_review
 from app.intelligence.identity import identity_snapshot
 from app.intelligence.mention_bindings import binding_key, binding_snapshot
 from app.intelligence.models import (
-    BrandFact,
     ClaimEvidence,
     ContentSegment,
     EntityMention,
-    IntelligenceRun,
     OwnedContentAsset,
     SourceFetch,
     SourceSnapshot,
@@ -181,77 +179,9 @@ async def current_questions(db, run, keys, *, lock=False):
 
 
 async def selected_fact(db, project, fact_id, *, lock=False):
-    """Effective source/identity status for one fact, independent of unrelated context."""
-    from app.intelligence.owned_facts import fact_status, owned_fact_fresh
-    from app.intelligence.reviews import evidence_material, review_snapshot
+    from app.intelligence.fact_qualification import qualified_fact
 
-    fact = await scalar(
-        db,
-        select(BrandFact).where(
-            BrandFact.project_id == project, BrandFact.id == fact_id
-        ),
-        lock,
-    )
-    if not fact:
-        return {"id": fact_id, "status": "missing"}
-    if fact.source_kind == "owned_asset_revision":
-        fresh = await owned_fact_fresh(db, fact, lock=lock)
-    else:
-        from app.intelligence.models import ClaimReview
-
-        review = await db.scalar(
-            select(ClaimReview).where(
-                ClaimReview.project_id == project, ClaimReview.id == fact.review_id
-            )
-        )
-        origin = (
-            await db.scalar(
-                select(IntelligenceRun).where(
-                    IntelligenceRun.project_id == project,
-                    IntelligenceRun.id == review.run_id,
-                )
-            )
-            if review
-            else None
-        )
-        evidence = (
-            await db.scalar(
-                select(ClaimEvidence).where(
-                    ClaimEvidence.project_id == project,
-                    ClaimEvidence.id == review.evidence_id,
-                )
-            )
-            if review
-            else None
-        )
-        fresh = False
-        if origin and evidence:
-            try:
-                _, citation, proof = await evidence_material(db, origin, evidence)
-                _, frozen, current = await scoped_identity(
-                    db,
-                    origin,
-                    [fact.entity_id],
-                    [evidence.answer_segment_id, evidence.source_segment_id],
-                    lock=lock,
-                )
-                identity = current["identities"].get(fact.entity_id) or {}
-                latest = (await review_snapshot(db, project, origin.id, lock=lock)).get(
-                    evidence.id
-                ) or {}
-                fetch = await latest_fetch(db, origin, citation, lock=lock)
-                fresh = (
-                    proof == review.evidence_hash
-                    and frozen == current
-                    and latest.get("id") == review.id
-                    and review.relation == "supports"
-                    and identity.get("event_id") == fact.identity_event_id
-                    and identity.get("decision") == "confirmed"
-                    and (not fetch or fetch.snapshot_id == citation.get("snapshot_id"))
-                )
-            except HTTPException:
-                pass
-    return await fact_status(db, fact, fresh, lock=lock)
+    return await qualified_fact(db, project, fact_id, lock=lock)
 
 
 async def latest_fetch(db, run, source, *, lock=False):

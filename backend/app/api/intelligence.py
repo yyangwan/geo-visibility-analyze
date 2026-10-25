@@ -399,6 +399,42 @@ from app.intelligence.drafts import DraftRequest, authorize_draft, export_brief
 from app.intelligence.models import DraftApproval
 
 
+@router.get("/actions/{action_id}/eligible-facts")
+async def eligible_action_facts(
+    action_id: str, expected_revision: int = Query(ge=1),
+    offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.fact_qualification import eligible_facts
+
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    await action_run(db, user, action.run_id)
+    return await eligible_facts(db, action, expected_revision, offset=offset, limit=limit)
+
+
+@router.get("/actions/{action_id}/draft-approvals")
+async def content_approval_state(action_id: str, expected_revision: int = Query(ge=1),
+                                 user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.action_revisions import current_revision, revision_integrity
+
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    await action_run(db, user, action.run_id)
+    revision, _ = await current_revision(db, action)
+    if revision.revision != expected_revision or not revision_integrity(action, revision):
+        raise HTTPException(409, "Action revision changed; refresh content authorization")
+    grant = await db.scalar(select(DraftApproval).where(DraftApproval.project_id == user["pid"], DraftApproval.action_id == action.id).order_by(DraftApproval.version.desc()).limit(1))
+    return {"schema_version": 3, "action_id": action.id, "revision": revision.revision, "revision_id": revision.id,
+            "latest_version": grant.version if grant else 0, "approval_id": grant.id if grant else None,
+            "bound_to_current_revision": bool(grant and grant.payload.get("actionRevision", {}).get("id") == revision.id),
+            "authorization_state": "not_verified", "can_authorize": user.get("role") in ("owner", "admin", "editor")}
+
+
 @router.post("/actions/{action_id}/draft-approvals", status_code=202)
 async def approve_content_draft(
     action_id: str,
