@@ -30,6 +30,22 @@ def test_fresh_baseline_contains_every_latest_model_and_no_drop_operations():
         and node.func.attr == "create_table"
     }
     assert created == set(Base.metadata.tables)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "create_table"
+        ):
+            columns = {
+                item.args[0].value
+                for item in node.args[1:]
+                if isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Attribute)
+                and item.func.attr == "Column"
+            }
+            assert columns == set(
+                Base.metadata.tables[node.args[0].value].columns.keys()
+            )
     assert {
         "intelligence_context_analyses",
         "intelligence_owned_assets",

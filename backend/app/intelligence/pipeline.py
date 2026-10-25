@@ -642,6 +642,7 @@ class Pipeline:
                 and summary["context_analysis"]["status"] == "processed"
                 and not alignment["deferred_pairs"]
                 and not alignment["invalid_pairs"]
+                and not alignment["unchecked_pairs"]
             )
             current.coverage, current.summary = coverage, summary
             current.status = "ready" if coverage["complete"] else "partial"
@@ -967,16 +968,26 @@ async def build_summary(db, run):
             "source_quote": row.source_quote,
             "relation": row.relation,
             "review_state": row.review_state,
+            "method": row.method,
             "citation_id": row.citation_id,
             "source_segment_id": row.source_segment_id,
             "snapshot_id": sources_by_id[row.citation_id]["snapshot_id"],
             "source_title": sources_by_id[row.citation_id]["title"],
             "source_url": sources_by_id[row.citation_id]["url"],
             "platform": sources_by_id[row.citation_id]["platform"],
+            "response_id": sources_by_id[row.citation_id]["response_id"],
+            "verification": row.verification,
         }
         for row in evidence_rows
         if row.citation_id in sources_by_id
     ]
+    from app.intelligence.source_observations import (
+        annotate_evidence,
+        project_source_observations,
+    )
+
+    source_observations = await project_source_observations(db, run)
+    annotate_evidence(claim_evidence, source_observations)
     groups = {}
     for response in response_map.values():
         key = stable_hash(
@@ -1011,6 +1022,7 @@ async def build_summary(db, run):
         "mentions": evidence,
         "claims": claims,
         "claim_evidence": claim_evidence,
+        "source_observations": source_observations,
         "prompt_platforms": list(groups.values()),
         "topics": dict(topics),
         "diagnoses": diagnoses,

@@ -708,6 +708,25 @@ async def get_context_analyses(
             "next_offset": offset + limit if offset + limit < len(rows) else None}
 
 
+@router.get("/runs/{run_id}/source-observations")
+async def get_source_observations(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    document_id: str | None = Query(None, max_length=32),
+    platform: str | None = Query(None, max_length=50),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("source_observations", {})
+    rows = [row for row in projection.get("observations", [])
+            if (document_id is None or row.get("document_id") == document_id)
+            and (platform is None or row.get("platform") == platform)]
+    return {"version": projection.get("version"), "status": "published" if projection else "pending",
+            "items": rows[offset:offset + limit], "total": len(rows),
+            "next_offset": offset + limit if offset + limit < len(rows) else None,
+            "independent_publishers": projection.get("independent_publishers"),
+            "content_family_coverage": projection.get("content_family_coverage")}
+
+
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
 async def review_identity(
     run_id: str,

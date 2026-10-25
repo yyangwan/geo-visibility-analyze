@@ -308,6 +308,7 @@ def extraction_signature(model: str, base_url: str) -> str:
 
 
 def analysis_signature(model: str, base_url: str) -> str:
+    from app.intelligence.citation_context import EVIDENCE_POLICY
     from app.intelligence.contextual_analysis import context_signature
     from app.intelligence.diagnosis import DIAGNOSIS_VERSION
     from app.intelligence.evidence import SYSTEM as evidence_system
@@ -324,7 +325,7 @@ def analysis_signature(model: str, base_url: str) -> str:
             "endpoint": base_url,
             "prompt": SYSTEM,
             "evidence_prompt": evidence_system,
-            "evidence_policy": "same-answer-actual-reference-top5-v1",
+            "evidence_policy": EVIDENCE_POLICY,
             "diagnosis_policy": DIAGNOSIS_VERSION,
             "model_request_policy": {
                 "version": model_policy_version,

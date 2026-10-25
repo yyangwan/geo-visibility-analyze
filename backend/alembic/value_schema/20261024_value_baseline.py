@@ -389,6 +389,7 @@ def upgrade():
     sa.Column('source_quote', sa.Text(), nullable=False),
     sa.Column('relation', sa.String(length=24), nullable=False),
     sa.Column('method', sa.String(length=24), nullable=False),
+    sa.Column('verification', sa.JSON(), nullable=False),
     sa.Column('review_state', sa.String(length=24), nullable=False),
     sa.Column('id', sa.String(length=32), nullable=False),
     sa.Column('project_id', sa.String(length=50), nullable=False),

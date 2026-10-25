@@ -169,7 +169,7 @@ class CitationObservation(Scoped, Base):
     title: Mapped[str] = mapped_column(Text, default="")
     snippet: Mapped[str] = mapped_column(Text, default="")
     document_id: Mapped[str | None] = mapped_column(String(32))
-    anchor: Mapped[dict | None] = mapped_column(JSON)
+    anchor: Mapped[list | None] = mapped_column(JSON)
 
 
 class ContentSegment(Scoped, Base):
@@ -383,6 +383,7 @@ class ClaimEvidence(Scoped, Base):
     source_quote: Mapped[str] = mapped_column(Text)
     relation: Mapped[str] = mapped_column(String(24))
     method: Mapped[str] = mapped_column(String(24))
+    verification: Mapped[dict] = mapped_column(JSON, default=dict)
     review_state: Mapped[str] = mapped_column(String(24), default="needs_review")
 
 

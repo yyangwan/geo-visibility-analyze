@@ -4,7 +4,14 @@ import json
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from app.intelligence.answer_quality import is_status_only_answer
 from app.intelligence.blob import digest
@@ -58,7 +65,7 @@ class Source(StrictFact):
     url_resolution: Literal[
         "exact", "site_root", "candidate", "unavailable", "unknown"
     ] = Field(alias="urlResolution")
-    answer_anchor: tuple[int, int] | None = Field(default=None, alias="answerAnchor")
+    answer_anchor: tuple[StrictInt, StrictInt] | None = Field(default=None, alias="answerAnchor")
 
 
 class SourcePanel(StrictFact):

@@ -85,6 +85,8 @@ async def add_event(db, event):
 
 
 async def evidence_material(db, run, evidence):
+    from app.intelligence.citation_context import association, snapshot_matches
+
     sources = {source["id"]: source for source in run.manifest["sources"]}
     citation = sources.get(evidence.citation_id)
     answer = await db.scalar(
@@ -124,6 +126,7 @@ async def evidence_material(db, run, evidence):
         snapshot is None
         or snapshot.integrity_status != "verified"
         or snapshot.document_id != citation["document_id"]
+        or not snapshot_matches(citation, snapshot)
     ):
         raise HTTPException(409, "Source snapshot integrity is not verified")
     responses = {response["id"]: response for response in run.manifest["responses"]}
@@ -132,6 +135,14 @@ async def evidence_material(db, run, evidence):
         or responses[citation["response_id"]]["platform"] != citation["platform"]
     ):
         raise HTTPException(409, "Evidence platform mismatch")
+    span = evidence.verification.get("answer_span")
+    if span and (
+        type(span.get("start")) is not int or type(span.get("end")) is not int
+        or not (answer.start_offset <= span["start"] < span["end"] <= answer.end_offset)
+        or responses[citation["response_id"]]["text"][span["start"]:span["end"]] != evidence.answer_quote
+        or not association(citation, responses[citation["response_id"]], span["start"], span["end"])["eligible"]
+    ):
+        raise HTTPException(409, "Evidence does not match the frozen answer anchor")
     proof = stable_hash(
         [
             run.id,
@@ -139,6 +150,7 @@ async def evidence_material(db, run, evidence):
             run.signature,
             evidence.id,
             evidence.answer_quote,
+            evidence.verification,
             citation,
             answer.text,
             source.text,

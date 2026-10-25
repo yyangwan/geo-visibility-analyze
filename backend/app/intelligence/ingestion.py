@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.intelligence.answer_quality import is_status_only_answer
+from app.intelligence.citation_context import freeze_anchor, snapshot_version
 from app.intelligence.models import (
     AnalysisJob,
     AuditSample,
@@ -142,9 +143,7 @@ async def prepare_run(
                 title=str(source.get("title") or source.get("page_title") or ""),
                 snippet=str(source.get("snippet") or source.get("summary") or ""),
                 document_id=document.id if document else None,
-                anchor=source.get("answerAnchor")
-                if isinstance(source.get("answerAnchor"), dict)
-                else None,
+                anchor=source.get("answerAnchor"),
             )
             db.add(observation)
             observations.append(observation)
@@ -309,7 +308,12 @@ async def prepare_run(
                 db.add(observation)
                 observations.append(observation)
         await db.flush()
+    response_map = {row["id"]: row for row in frozen_responses}
     for observation in observations:
+        # Only the selected immutable capture belongs to this Run, not superseded attempts.
+        response = response_map.get(str(observation.response_id))
+        if response is None:
+            continue
         snapshot, fetch = None, None
         if observation.document_id:
             fetch = await db.scalar(
@@ -327,6 +331,7 @@ async def prepare_run(
         sources.append(
             {
                 "id": observation.id,
+                "ordinal": observation.ordinal,
                 "response_id": str(observation.response_id),
                 "document_id": observation.document_id,
                 "platform": observation.platform,
@@ -336,6 +341,8 @@ async def prepare_run(
                 "snippet": observation.snippet,
                 "url_resolution": observation.url_resolution,
                 "snapshot_id": snapshot.id if snapshot else None,
+                "snapshot_version": snapshot_version(snapshot) if snapshot else None,
+                "answer_anchor": freeze_anchor(observation.anchor, response["text"]),
                 "quality": snapshot.quality if snapshot else {},
                 "fetch_status": fetch.status
                 if fetch
