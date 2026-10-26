@@ -7,10 +7,11 @@ import asyncio
 import random
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 
 from app.config import settings
@@ -43,7 +44,19 @@ MIN_ROUNDS = 3
 class CohortRequest(StrictFact):
     baseline_run_id: str = Field(alias="baselineRunId", pattern=r"^[a-f0-9]{32}$")
     title: str = Field(min_length=5, max_length=200)
-    entity_ids: list[str] = Field(alias="entityIds", min_length=1, max_length=20)
+    comparison_mode: Literal["inferential_v1", "descriptive_v1"] = Field(
+        default="inferential_v1", alias="comparisonMode"
+    )
+    entity_ids: list[str] = Field(
+        default_factory=list, alias="entityIds", max_length=20
+    )
+    brand_target_ids: list[str] = Field(
+        default_factory=list, alias="brandTargetIds", max_length=20
+    )
+    platforms: list[str] = Field(default_factory=list, max_length=20)
+    prompt_hashes: list[str] = Field(
+        default_factory=list, alias="promptHashes", max_length=1000
+    )
     idempotency_key: str = Field(
         alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
     )
@@ -58,6 +71,38 @@ class CohortRequest(StrictFact):
         ):
             raise ValueError("Unique entity IDs required")
         return values
+
+    @model_validator(mode="after")
+    def comparison_scope(self):
+        import re
+
+        if self.comparison_mode == "inferential_v1":
+            if (
+                not self.entity_ids
+                or self.brand_target_ids
+                or self.platforms
+                or self.prompt_hashes
+            ):
+                raise ValueError(
+                    "Inferential mode requires entity IDs and its full frozen sampling scope"
+                )
+        elif not self.brand_target_ids or self.entity_ids:
+            raise ValueError(
+                "Descriptive mode requires stable brand targets, not observed entity IDs"
+            )
+        for values in (self.brand_target_ids, self.platforms, self.prompt_hashes):
+            if len(values) != len(set(values)):
+                raise ValueError("Comparison scope must not contain duplicates")
+        if any(
+            not re.fullmatch(r"(?:registry|entity):[a-zA-Z0-9_-]{1,180}", value)
+            for value in self.brand_target_ids
+        ):
+            raise ValueError("Stable brand target IDs required")
+        if any(
+            not re.fullmatch(r"[a-f0-9]{64}", value) for value in self.prompt_hashes
+        ):
+            raise ValueError("Frozen prompt hashes required")
+        return self
 
 
 class RetestRequest(StrictFact):
@@ -134,6 +179,7 @@ async def create_cohort(db, project_id, data, actor_id):
             IntelligenceRun.id == data.baseline_run_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if run is None:
         raise HTTPException(404, "Baseline run not found")
@@ -153,7 +199,9 @@ async def create_cohort(db, project_id, data, actor_id):
     if run.status not in ("ready", "partial"):
         raise HTTPException(409, "Wait for published baseline")
     entities = {item["id"]: item for item in run.summary.get("entities", [])}
-    if any(eid not in entities for eid in data.entity_ids):
+    if data.comparison_mode == "inferential_v1" and any(
+        eid not in entities for eid in data.entity_ids
+    ):
         raise HTTPException(422, "Select entities observed in the baseline")
     samples = (
         await db.scalars(
@@ -198,6 +246,7 @@ async def create_cohort(db, project_id, data, actor_id):
         )
     specification = {
         "version": METRIC_VERSION,
+        "comparison_mode": data.comparison_mode,
         "baseline_run_id": run.id,
         "baseline_input_hash": run.input_hash,
         "analysis_signature": run.signature,
@@ -219,6 +268,10 @@ async def create_cohort(db, project_id, data, actor_id):
         "metric": "answer_presence",
         "causal_claim_allowed": False,
     }
+    if data.comparison_mode == "descriptive_v1":
+        from app.intelligence.descriptive_measurement import freeze_descriptive
+
+        specification = freeze_descriptive(run, data, rows)
     cohort = MeasurementCohort(
         project_id=project_id,
         baseline_run_id=run.id,
@@ -235,9 +288,19 @@ async def create_cohort(db, project_id, data, actor_id):
 
 
 def checked_spec(cohort):
+    from app.intelligence.descriptive_measurement import VERSION as DESCRIPTIVE_VERSION
+    from app.intelligence.descriptive_measurement import supported_spec
+
+    mode = cohort.specification.get("comparison_mode", "inferential_v1")
+    expected_version = (
+        DESCRIPTIVE_VERSION if mode == "descriptive_v1" else METRIC_VERSION
+    )
     if (
         stable_hash(cohort.specification) != cohort.specification_hash
-        or cohort.specification.get("version") != METRIC_VERSION
+        or mode not in ("descriptive_v1", "inferential_v1")
+        or cohort.specification.get("version") != expected_version
+        or mode == "descriptive_v1"
+        and not supported_spec(cohort.specification)
     ):
         raise HTTPException(
             409, "Frozen cohort specification changed or is unsupported"
@@ -246,25 +309,31 @@ def checked_spec(cohort):
 
 
 async def start_retest(db, cohort, data, actor_id):
-    await db.scalar(
+    cohort = await db.scalar(
         select(MeasurementCohort)
         .where(
             MeasurementCohort.project_id == cohort.project_id,
             MeasurementCohort.id == cohort.id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     previous = await db.scalar(
-        select(CohortRetest).where(
+        select(CohortRetest)
+        .where(
             CohortRetest.project_id == cohort.project_id,
             CohortRetest.cohort_id == cohort.id,
             CohortRetest.idempotency_key == data.idempotency_key,
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if previous:
         return previous
     spec = checked_spec(cohort)
     baseline = await scoped_run(db, cohort.project_id, cohort.baseline_run_id)
+    if baseline.input_hash != spec["baseline_input_hash"]:
+        raise HTTPException(409, "Frozen baseline input changed")
     audit = Audit(
         project_id=cohort.project_id,
         status=QueryStatus.RUNNING,
@@ -367,6 +436,9 @@ async def run_snapshot(db, run):
                 ambiguous.add(mention["owner_id"])
             hits[mention["entity_id"]].add(mention["owner_id"])
     return {
+        "brand_presence": run.summary.get("brand_presence") or {},
+        "evaluation_cohort": run.manifest.get("evaluation_cohort") or {},
+        "entity_aliases": run.manifest.get("entity_aliases", {}),
         "source_metrics": await source_snapshot(db, run),
         "responses": run.manifest.get("responses", []),
         "completed": completed,
@@ -470,6 +542,10 @@ def source_trace_examples(observed, snapshot, platform, entity_id, expected):
 
 
 def compare_snapshots(spec, baseline, followup, *, include_sources=True):
+    if spec.get("comparison_mode") == "descriptive_v1":
+        from app.intelligence.descriptive_measurement import compare_descriptive
+
+        return compare_descriptive(spec, baseline, followup)
     base_rows, next_rows = defaultdict(list), defaultdict(list)
     for row in baseline["responses"]:
         base_rows[slot_key(row)].append(row)
@@ -697,6 +773,7 @@ def compare_snapshots(spec, baseline, followup, *, include_sources=True):
                     )
     return {
         "version": METRIC_VERSION,
+        "comparison_mode": "inferential_v1",
         "analysis_signature_equal": signature_equal,
         "identity_context_equal": identity_equal,
         "platforms": platforms,
@@ -725,24 +802,28 @@ def compare_snapshots(spec, baseline, followup, *, include_sources=True):
 
 
 async def compare_cohort(db, cohort, data, actor_id):
-    await db.scalar(
+    cohort = await db.scalar(
         select(MeasurementCohort)
         .where(
             MeasurementCohort.project_id == cohort.project_id,
             MeasurementCohort.id == cohort.id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    spec = checked_spec(cohort)
     existing = await db.scalar(
-        select(MeasurementResult).where(
+        select(MeasurementResult)
+        .where(
             MeasurementResult.project_id == cohort.project_id,
             MeasurementResult.cohort_id == cohort.id,
             MeasurementResult.followup_run_id == data.followup_run_id,
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if existing:
         return existing
-    spec = checked_spec(cohort)
     baseline = await scoped_run(db, cohort.project_id, cohort.baseline_run_id)
     followup = await scoped_run(db, cohort.project_id, data.followup_run_id)
     if baseline.audit_id == followup.audit_id:
@@ -778,7 +859,7 @@ async def compare_cohort(db, cohort, data, actor_id):
         followup_run_id=followup.id,
         comparison_signature=stable_hash(
             [
-                METRIC_VERSION,
+                spec["version"],
                 cohort.specification_hash,
                 [baseline.id, baseline.input_hash, baseline.signature],
                 [followup.id, followup.input_hash, followup.signature],

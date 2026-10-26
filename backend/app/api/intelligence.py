@@ -223,6 +223,10 @@ def cohort_view(row):
         "minimum_prompt_clusters": spec["min_prompts"],
         "minimum_rounds": spec["min_rounds"],
         "specification_hash": row.specification_hash,
+        "comparison_mode": spec.get("comparison_mode", "inferential_v1"),
+        "metric_version": spec["version"],
+        "brand_targets": spec.get("brand_targets", []),
+        "question_scope": spec.get("question_scope", []),
     }
 
 
@@ -326,11 +330,9 @@ async def measure_cohort(
     action_writer(user)
     row = await compare_cohort(db, cohort, data, str(user["sub"]))
     await db.commit()
-    return {
-        "id": row.id,
-        "comparison_signature": row.comparison_signature,
-        **row.result,
-    }
+    from app.intelligence.measurement_history import saved_measurements
+
+    return (await saved_measurements(db, cohort.project_id, [(row, cohort)]))[0]
 
 
 @router.get("/cohorts/{cohort_id}/results")
@@ -351,16 +353,9 @@ async def measurement_results(
             .limit(10)
         )
     ).all()
-    return {
-        "results": [
-            {
-                "id": row.id,
-                "comparison_signature": row.comparison_signature,
-                **row.result,
-            }
-            for row in rows
-        ]
-    }
+    from app.intelligence.measurement_history import saved_measurements
+
+    return {"results": await saved_measurements(db, cohort.project_id, [(row, cohort) for row in rows])}
 
 
 @router.post("/projects/{project_id}/assets", status_code=202)
