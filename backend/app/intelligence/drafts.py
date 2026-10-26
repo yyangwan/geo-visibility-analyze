@@ -18,7 +18,13 @@ from pydantic import (
 from sqlalchemy import select
 
 from app.config import settings
-from app.intelligence.brief_contracts import CHANNELS, EvidenceBriefV3, OwnFact
+from app.intelligence.brief_contracts import (
+    CHANNELS,
+    EvidenceBriefV3,
+    FrozenConditions,
+    OwnFact,
+)
+from app.intelligence.capture_contract import CaptureConditions
 from app.intelligence.models import ActionPlan, DraftApproval, OwnedContentAsset
 from app.intelligence.semantics import stable_hash
 from app.utils.timezone import utc_isoformat, utcnow
@@ -153,7 +159,7 @@ def ai_targets(pack, run):
             q for q in pack.delivery.questions if q.prompt_hash == row.prompt_hash
         )
         observations = [
-            {"responseId": response["id"], "conditions": response.get("conditions", {})}
+            {"responseId": response["id"], "conditions": brief_conditions(response)}
             for response in run.manifest["responses"]
             if response["platform"] == row.platform
             and response["prompt_hash"] == row.prompt_hash
@@ -169,6 +175,17 @@ def ai_targets(pack, run):
             }
         )
     return values
+
+
+def brief_conditions(response):
+    """Translate observed capture-v2 fields into the frozen Brief wire contract."""
+    observed = response.get("conditions") or {}
+    if response.get("prompt_version_id"):
+        observed = {
+            **CaptureConditions.model_validate(observed).model_dump(),
+            "surface": response.get("surface"),
+        }
+    return FrozenConditions.model_validate(observed).model_dump(mode="json")
 
 
 async def authorize_draft(db, action, run, data, actor, *, blobs=None):

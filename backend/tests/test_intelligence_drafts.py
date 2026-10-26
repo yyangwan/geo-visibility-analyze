@@ -15,7 +15,7 @@ from app.intelligence.reviews import (
 from app.utils.timezone import utcnow
 
 
-async def fixture_draft(db, tmp_path, monkeypatch, project="p1"):
+async def fixture_draft(db, tmp_path, monkeypatch, project="p1", *, capture_v2=False):
     from app.intelligence.action_revisions import RevisionRequest, revise_plan
     from app.intelligence.blob import LocalBlobStore
     from app.intelligence.owned_assets import (
@@ -27,7 +27,7 @@ async def fixture_draft(db, tmp_path, monkeypatch, project="p1"):
     from tests.test_intelligence_action_revisions import task_plan
     from tests.test_intelligence_owned_assets import TEXT, approval, verification
 
-    run, plan, pack = await task_plan(db, project, reviewed=True)
+    run, plan, pack = await task_plan(db, project, reviewed=True, capture_v2=capture_v2)
     store = LocalBlobStore(tmp_path)
     monkeypatch.setattr("app.intelligence.owned_assets.configured_store", lambda: store)
     asset = await register_asset(
@@ -83,6 +83,63 @@ async def fixture_draft(db, tmp_path, monkeypatch, project="p1"):
         idempotencyKey="draft-approval-key",
     )
     return run, run, plan, fact, request
+
+
+@pytest.mark.asyncio
+async def test_capture_v2_original_task_can_authorize_and_export_content_without_inventing_conditions(
+    db_session, tmp_path, monkeypatch
+):
+    _, run, plan, _, request = await fixture_draft(
+        db_session, tmp_path, monkeypatch, capture_v2=True
+    )
+    raw = run.manifest["responses"][0]["conditions"].copy()
+    grant = await authorize_draft(
+        db_session,
+        plan,
+        run,
+        request.model_copy(update={"channel": "website"}),
+        "reviewer",
+    )
+    await db_session.commit()
+    brief = await export_brief(db_session, grant, plan, run)
+    actual = brief["aiTargets"][0]["observations"][0]["conditions"]
+    assert actual == {
+        "surface": "app",
+        "search_mode": "unknown",
+        "model_version": None,
+        "account_class": None,
+        "location": None,
+    }
+    assert run.manifest["responses"][0]["conditions"] == raw
+    assert "searchMode" in raw and "searchMode" not in actual
+
+
+def test_brief_condition_adapter_keeps_observed_values_and_never_uses_requested_conditions():
+    from app.intelligence.drafts import brief_conditions
+
+    response = {
+        "prompt_version_id": "frozen",
+        "surface": "app",
+        "conditions": {
+            "searchMode": "disabled",
+            "modelVersion": "observed-model",
+            "accountClass": None,
+            "location": None,
+        },
+        "requested_conditions": {
+            "searchMode": "enabled",
+            "modelVersion": "requested-model",
+            "accountClass": "premium",
+            "location": "Shanghai",
+        },
+    }
+    assert brief_conditions(response) == {
+        "surface": "app",
+        "search_mode": "disabled",
+        "model_version": "observed-model",
+        "account_class": None,
+        "location": None,
+    }
 
 
 @pytest.mark.asyncio
