@@ -8,7 +8,6 @@ import random
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Literal
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from pydantic import Field, field_validator, model_validator
@@ -18,7 +17,6 @@ from app.config import settings
 from app.intelligence.blob import digest
 from app.intelligence.capture_contract import CaptureConditions, StrictFact
 from app.intelligence.models import (
-    ActionPlan,
     AuditSample,
     CohortRetest,
     ContentSegment,
@@ -26,14 +24,12 @@ from app.intelligence.models import (
     MeasurementCohort,
     MeasurementResult,
     PromptVersion,
-    PublishedAsset,
     SamplingAudit,
     SegmentAnalysis,
 )
 from app.intelligence.sampling import dispatch_attempt
 from app.intelligence.semantics import stable_hash
 from app.models.models import Audit, AuditStage, QueryStatus
-from app.utils.timezone import utc_isoformat, utcnow
 
 METRIC_VERSION = "paired-source-presence-2"
 BOOTSTRAP_DRAWS = 2000
@@ -57,11 +53,20 @@ class CohortRequest(StrictFact):
     prompt_hashes: list[str] = Field(
         default_factory=list, alias="promptHashes", max_length=1000
     )
+    action_id: str | None = Field(
+        default=None, alias="actionId", pattern=r"^[a-f0-9]{32}$"
+    )
+    expected_action_revision: int | None = Field(
+        default=None, alias="expectedActionRevision", ge=1
+    )
+    publication_asset_ids: list[str] = Field(
+        default_factory=list, alias="publicationAssetIds", max_length=20
+    )
     idempotency_key: str = Field(
         alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
     )
 
-    @field_validator("entity_ids")
+    @field_validator("entity_ids", "publication_asset_ids")
     @classmethod
     def unique_ids(cls, values):
         import re
@@ -82,6 +87,9 @@ class CohortRequest(StrictFact):
                 or self.brand_target_ids
                 or self.platforms
                 or self.prompt_hashes
+                or self.action_id
+                or self.expected_action_revision
+                or self.publication_asset_ids
             ):
                 raise ValueError(
                     "Inferential mode requires entity IDs and its full frozen sampling scope"
@@ -90,6 +98,12 @@ class CohortRequest(StrictFact):
             raise ValueError(
                 "Descriptive mode requires stable brand targets, not observed entity IDs"
             )
+        if (
+            bool(self.action_id) != bool(self.expected_action_revision)
+            or self.publication_asset_ids
+            and not self.action_id
+        ):
+            raise ValueError("Publication scope requires an exact action revision")
         for values in (self.brand_target_ids, self.platforms, self.prompt_hashes):
             if len(values) != len(set(values)):
                 raise ValueError("Comparison scope must not contain duplicates")
@@ -115,44 +129,6 @@ class CompareRequest(StrictFact):
     followup_run_id: str = Field(alias="followupRunId", pattern=r"^[a-f0-9]{32}$")
 
 
-class AssetRequest(StrictFact):
-    action_id: str = Field(alias="actionId", pattern=r"^[a-f0-9]{32}$")
-    url: str = Field(min_length=1, max_length=4096)
-    channel: str = Field(
-        pattern=r"^(wechat|weibo|xiaohongshu|douyin|website|zhihu|toutiao)$"
-    )
-    content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
-    published_at: datetime = Field(alias="publishedAt")
-    reason: str = Field(min_length=5, max_length=2000)
-    idempotency_key: str = Field(
-        alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
-    )
-
-    @field_validator("url")
-    @classmethod
-    def public_link(cls, value):
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in ("http", "https")
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-        ):
-            raise ValueError("An HTTP publication URL without credentials is required")
-        return value
-
-    @field_validator("published_at")
-    @classmethod
-    def known_time(cls, value):
-        if (
-            value.tzinfo is None
-            or value.utcoffset() is None
-            or value.astimezone(UTC).replace(tzinfo=None) > utcnow()
-        ):
-            raise ValueError("An observed publication time with timezone is required")
-        return value
-
-
 async def scoped_run(db, project_id, run_id):
     run = await db.scalar(
         select(IntelligenceRun).where(
@@ -171,6 +147,21 @@ def identity_context(run, ids):
 
 
 async def create_cohort(db, project_id, data, actor_id):
+    action = None
+    if data.action_id:
+        from app.intelligence.publication import lock_publication_action
+
+        baseline_audit = await db.scalar(
+            select(IntelligenceRun.audit_id).where(
+                IntelligenceRun.project_id == project_id,
+                IntelligenceRun.id == data.baseline_run_id,
+            )
+        )
+        if baseline_audit is None:
+            raise HTTPException(404, "Baseline run not found")
+        action = await lock_publication_action(
+            db, project_id, data.action_id, other_audit_ids=(baseline_audit,)
+        )
     # Lock the existing baseline row to serialize cohort idempotency and input freezing.
     run = await db.scalar(
         select(IntelligenceRun)
@@ -238,6 +229,7 @@ async def create_cohort(db, project_id, data, actor_id):
                 "sample_id": sample.id,
                 "prompt_version_id": version.id,
                 "prompt_hash": version.text_hash,
+                "prompt": version.text,
                 "platform": sample.platform,
                 "surface": sample.surface,
                 "sample_index": sample.sample_index,
@@ -270,8 +262,19 @@ async def create_cohort(db, project_id, data, actor_id):
     }
     if data.comparison_mode == "descriptive_v1":
         from app.intelligence.descriptive_measurement import freeze_descriptive
+        from app.intelligence.publication import freeze_action_link
 
+        link = await freeze_action_link(db, action, data) if action else None
+        if link:
+            allowed = {
+                (row["platform"], row["prompt_hash"]) for row in link["ai_targets"]
+            }
+            rows = [
+                row for row in rows if (row["platform"], row["prompt_hash"]) in allowed
+            ]
         specification = freeze_descriptive(run, data, rows)
+        if link:
+            specification["action_link"] = link
     cohort = MeasurementCohort(
         project_id=project_id,
         baseline_run_id=run.id,
@@ -839,6 +842,9 @@ async def compare_cohort(db, cohort, data, actor_id):
         await run_snapshot(db, baseline),
         await run_snapshot(db, followup),
     )
+    from app.intelligence.publication import add_publication_windows
+
+    result = add_publication_windows(result, spec)
     result.update(
         {
             "baseline_run_id": baseline.id,
@@ -871,53 +877,3 @@ async def compare_cohort(db, cohort, data, actor_id):
     db.add(row)
     await db.flush()
     return row
-
-
-async def record_asset(db, project_id, data, actor_id):
-    action = await db.scalar(
-        select(ActionPlan)
-        .where(ActionPlan.project_id == project_id, ActionPlan.id == data.action_id)
-        .with_for_update()
-    )
-    if action is None:
-        raise HTTPException(404, "Action not found")
-    request_hash = stable_hash(data.model_dump(mode="json", by_alias=True))
-    previous = await db.scalar(
-        select(PublishedAsset).where(
-            PublishedAsset.project_id == project_id,
-            PublishedAsset.idempotency_key == data.idempotency_key,
-        )
-    )
-    if previous:
-        if previous.request_hash != request_hash:
-            raise HTTPException(409, "Asset key reused for a different request")
-        return previous
-    asset = PublishedAsset(
-        project_id=project_id,
-        action_id=action.id,
-        url=data.url,
-        channel=data.channel,
-        content_hash=data.content_hash,
-        published_at=data.published_at.astimezone(UTC).replace(tzinfo=None),
-        reason=data.reason,
-        actor_id=actor_id,
-        idempotency_key=data.idempotency_key,
-        request_hash=request_hash,
-    )
-    db.add(asset)
-    await db.flush()
-    return asset
-
-
-def asset_view(row):
-    return {
-        "id": row.id,
-        "action_id": row.action_id,
-        "url": row.url,
-        "channel": row.channel,
-        "content_hash": row.content_hash,
-        "published_at": utc_isoformat(row.published_at),
-        "verification": "human_reported",
-        "reason": row.reason,
-        "publication_authorized": False,
-    }

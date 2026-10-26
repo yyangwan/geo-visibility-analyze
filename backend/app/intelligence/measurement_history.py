@@ -178,6 +178,10 @@ async def saved_measurements(db, project_id, pairs):
                         comparison_state="incompatible",
                         reason_codes=["snapshot_not_current"],
                     )
+                    if "publication_window" in observation:
+                        observation["publication_window"]["status"] = (
+                            "snapshot_not_current"
+                        )
                     for target in observation["targets"]:
                         for metric in target["metrics"]:
                             metric.update(

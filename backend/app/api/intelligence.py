@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.access import get_audit_for_project, require_project_scope
@@ -175,15 +175,12 @@ async def review_alias(
 
 
 from app.intelligence.measurement import (
-    AssetRequest,
     CohortRequest,
     CompareRequest,
     RetestRequest,
-    asset_view,
     checked_spec,
     compare_cohort,
     create_cohort,
-    record_asset,
     start_retest,
 )
 from app.intelligence.models import (
@@ -192,6 +189,8 @@ from app.intelligence.models import (
     MeasurementResult,
     PublishedAsset,
 )
+from app.intelligence.publication import PublicationRequest as AssetRequest
+from app.intelligence.publication import asset_view, publication_options, record_asset
 
 
 async def measurement_cohort(db, user, cohort_id):
@@ -227,25 +226,32 @@ def cohort_view(row):
         "metric_version": spec["version"],
         "brand_targets": spec.get("brand_targets", []),
         "question_scope": spec.get("question_scope", []),
+        "action_link": spec.get("action_link"),
+        "questions": [{"platform": slot["platform"], "prompt_hash": slot["prompt_hash"], "text": slot.get("prompt")} for slot in spec["slots"] if slot["sample_index"] == 1],
     }
 
 
 @router.get("/projects/{project_id}/cohorts")
 async def list_cohorts(
     project_id: str,
+    before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    rows = (
-        await db.scalars(
-            select(MeasurementCohort)
-            .where(MeasurementCohort.project_id == project_id)
-            .order_by(MeasurementCohort.created_at.desc())
-            .limit(50)
-        )
-    ).all()
-    return {"cohorts": [cohort_view(row) for row in rows]}
+    query = select(MeasurementCohort).where(MeasurementCohort.project_id == project_id)
+    if before:
+        cursor = await db.scalar(query.where(MeasurementCohort.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Cohort page not found")
+        query = query.where(or_(MeasurementCohort.created_at < cursor.created_at, and_(MeasurementCohort.created_at == cursor.created_at, MeasurementCohort.id < cursor.id)))
+    rows = list(await db.scalars(query.order_by(MeasurementCohort.created_at.desc(), MeasurementCohort.id.desc()).limit(51)))
+    return {"cohorts": [cohort_view(row) for row in rows[:50]], "next_before": rows[49].id if len(rows) > 50 else None}
+
+
+@router.get("/cohorts/{cohort_id}")
+async def get_cohort(cohort_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return cohort_view(await measurement_cohort(db, user, cohort_id))
 
 
 @router.post("/projects/{project_id}/cohorts", status_code=202)
@@ -295,28 +301,25 @@ async def list_retests(
                 CohortRetest.project_id == cohort.project_id,
                 CohortRetest.cohort_id == cohort.id,
             )
-            .order_by(CohortRetest.created_at.desc())
-            .limit(50)
+            .order_by(CohortRetest.created_at.desc(), CohortRetest.id.desc())
+            .limit(51)
         )
     ).all()
-    items = []
-    for row in rows:
-        state = await db.scalar(
-            select(AuditIntelligenceState).where(
-                AuditIntelligenceState.project_id == cohort.project_id,
-                AuditIntelligenceState.audit_id == row.audit_id,
-            )
-        )
-        audit = await get_audit_for_project(db, user, row.audit_id)
-        items.append(
-            {
-                "id": row.id,
-                "audit_id": str(row.audit_id),
-                "capture_status": audit.status.value,
-                "published_run_id": state.published_run_id if state else None,
-            }
-        )
-    return {"retests": items}
+    from app.intelligence.retest_retry import retest_state
+
+    return {"retests": [await retest_state(db, cohort, row) for row in rows[:50]], "truncated": len(rows) > 50}
+
+
+from app.intelligence.retest_retry import RetryRequest, repair_retest
+
+
+@router.post("/cohorts/{cohort_id}/retests/{retest_id}/retry", status_code=202)
+async def retry_missing_answers(cohort_id: str, retest_id: str, data: RetryRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cohort = await measurement_cohort(db, user, cohort_id)
+    action_writer(user)
+    result = await repair_retest(db, cohort, retest_id, data, str(user["sub"]))
+    await db.commit()
+    return result
 
 
 @router.post("/cohorts/{cohort_id}/results", status_code=202)
@@ -349,13 +352,13 @@ async def measurement_results(
                 MeasurementResult.project_id == cohort.project_id,
                 MeasurementResult.cohort_id == cohort.id,
             )
-            .order_by(MeasurementResult.created_at.desc())
-            .limit(10)
+            .order_by(MeasurementResult.created_at.desc(), MeasurementResult.id.desc())
+            .limit(11)
         )
     ).all()
     from app.intelligence.measurement_history import saved_measurements
 
-    return {"results": await saved_measurements(db, cohort.project_id, [(row, cohort) for row in rows])}
+    return {"results": await saved_measurements(db, cohort.project_id, [(row, cohort) for row in rows[:10]]), "truncated": len(rows) > 10}
 
 
 @router.post("/projects/{project_id}/assets", status_code=202)
@@ -367,27 +370,58 @@ async def register_asset(
 ):
     require_project_scope(user, project_id)
     action_writer(user)
-    row = await record_asset(db, project_id, data, str(user["sub"]))
+    row = await record_asset(db, project_id, data, str(user["sub"]), user.get("role", "viewer"))
     await db.commit()
     return asset_view(row)
+
+
+@router.get("/actions/{action_id}/publication-options")
+async def publication_version_options(action_id: str, revision: int | None = Query(None, ge=1), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    require_project_scope(user, user.get("pid", ""))
+    return await publication_options(db, user["pid"], action_id, revision, str(user.get("sub", "")), user.get("role", "viewer"))
+
+
+@router.get("/projects/{project_id}/publication-actions")
+async def publication_actions(project_id: str, before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.action_revisions import revision_integrity
+
+    require_project_scope(user, project_id)
+    query = select(ActionPlan, ActionPlanRevision).join(ActionPlanRevision, (ActionPlanRevision.project_id == ActionPlan.project_id) & (ActionPlanRevision.action_id == ActionPlan.id) & (ActionPlanRevision.revision == ActionPlan.revision)).where(ActionPlan.project_id == project_id)
+    if before:
+        cursor = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == project_id, ActionPlan.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Action page not found")
+        query = query.where(or_(ActionPlan.created_at < cursor.created_at, and_(ActionPlan.created_at == cursor.created_at, ActionPlan.id < cursor.id)))
+    rows = (await db.execute(query.order_by(ActionPlan.created_at.desc(), ActionPlan.id.desc()).limit(51))).all()
+    return {"actions": [{"id": action.id, "title": revision.payload["title"], "revision": revision.revision, "revision_id": revision.id,
+                         "run_id": revision.run_id, "integrity_valid": revision_integrity(action, revision), "task_pack_available": bool(revision.payload["target"].get("task_pack"))}
+                        for action, revision in rows[:50]], "next_before": rows[49][0].id if len(rows) > 50 else None}
 
 
 @router.get("/projects/{project_id}/assets")
 async def list_assets(
     project_id: str,
+    action_id: str | None = Query(None, alias="actionId", pattern=r"^[a-f0-9]{32}$"),
+    revision: int | None = Query(None, ge=1),
+    before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    rows = (
-        await db.scalars(
-            select(PublishedAsset)
-            .where(PublishedAsset.project_id == project_id)
-            .order_by(PublishedAsset.created_at.desc())
-            .limit(50)
-        )
-    ).all()
-    return {"assets": [asset_view(row) for row in rows]}
+    query = select(PublishedAsset).where(PublishedAsset.project_id == project_id)
+    if revision is not None and not action_id:
+        raise HTTPException(422, "Asset revision requires an action scope")
+    if action_id:
+        query = query.where(PublishedAsset.action_id == action_id)
+    if revision is not None:
+        query = query.where(PublishedAsset.provenance["revision"].as_integer() == revision)
+    if before:
+        cursor = await db.scalar(query.where(PublishedAsset.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Publication page not found in this scope")
+        query = query.where(or_(PublishedAsset.created_at < cursor.created_at, and_(PublishedAsset.created_at == cursor.created_at, PublishedAsset.id < cursor.id)))
+    rows = list(await db.scalars(query.order_by(PublishedAsset.created_at.desc(), PublishedAsset.id.desc()).limit(51)))
+    return {"assets": [asset_view(row) for row in rows[:50]], "next_before": rows[49].id if len(rows) > 50 else None}
 
 
 from app.intelligence.drafts import DraftRequest, authorize_draft, export_brief

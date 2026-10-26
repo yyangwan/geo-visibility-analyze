@@ -57,8 +57,8 @@ async def change(db, action, data, **options):
     return value
 
 
-async def arranged(db, *, approved=True):
-    run, action, pack = await task_plan(db)
+async def arranged(db, *, approved=True, capture_v2=False, project="p1"):
+    run, action, pack = await task_plan(db, project, capture_v2=capture_v2)
     if approved:
         await approve_plan(db, action, run, approval_request(), "owner", "owner")
         await db.commit()
@@ -84,7 +84,9 @@ async def test_read_does_not_initialize_and_follows_the_exact_revision(db_sessio
 
 
 @pytest.mark.asyncio
-async def test_read_rechecks_current_plan_dependencies_without_execution_write(db_session):
+async def test_read_rechecks_current_plan_dependencies_without_execution_write(
+    db_session,
+):
     _, action, _ = await arranged(db_session)
     assert (await read_execution(db_session, action, 1))["plan_approval_valid"]
     await receive_context(
@@ -99,7 +101,10 @@ async def test_read_rechecks_current_plan_dependencies_without_execution_write(d
     view = await read_execution(db_session, action, 1)
     assert not view["plan_approval_valid"] and view["version"] == 1
     assert view["snapshot"]["owner"]["id"] == "owner"
-    assert await db_session.scalar(select(func.count()).select_from(ActionExecutionEvent)) == 1
+    assert (
+        await db_session.scalar(select(func.count()).select_from(ActionExecutionEvent))
+        == 1
+    )
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.intelligence.action_dependencies import freeze_dependencies
+from app.intelligence.capture_contract import digest
 from app.intelligence.models import (
     ActionApproval,
     ActionPlan,
@@ -217,9 +218,15 @@ async def validate_own_facts(db, run, target, *, require_frozen=False):
         raise HTTPException(409, "Task requires its frozen own brand target")
     responses = run.manifest.get("responses", [])
     for question in pack.delivery.questions:
-        if stable_hash(question.text) != question.prompt_hash or not any(
+        if not any(
             row["prompt_hash"] == question.prompt_hash
             and row["prompt"] == question.text
+            and question.prompt_hash
+            == (
+                digest(question.text.encode())
+                if row.get("prompt_version_id")
+                else stable_hash(question.text)
+            )
             for row in responses
         ):
             raise HTTPException(

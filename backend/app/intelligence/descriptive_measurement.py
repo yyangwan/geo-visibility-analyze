@@ -226,6 +226,10 @@ def supported_spec(spec):
         and spec.get("min_prompts") == spec.get("min_rounds") == 1
         and bool(spec.get("slots"))
         and all(row.get("sample_index") == 1 for row in spec["slots"])
+        and (
+            not spec.get("action_link")
+            or spec["action_link"].get("policy_version") == "publication-window-v1"
+        )
     )
 
 
@@ -544,6 +548,10 @@ def compare_descriptive(spec, baseline, followup):
                     "comparison_state": state,
                     "reason_codes": reasons,
                     "condition_check": conditions,
+                    "baseline_observed_at": before.get("observed_at")
+                    if before
+                    else None,
+                    "followup_observed_at": after.get("observed_at") if after else None,
                     "baseline_conditions": deepcopy(before.get("conditions"))
                     if before
                     else None,

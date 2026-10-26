@@ -39,7 +39,9 @@ from app.main import app
 from tests.test_intelligence_foundation import fixture_audit
 
 
-async def task_plan(db, project="p1", *, fact_ids=(), own_id="own", reviewed=False):
+async def task_plan(
+    db, project="p1", *, fact_ids=(), own_id="own", reviewed=False, capture_v2=False
+):
     await receive_context(
         db,
         project,
@@ -54,6 +56,78 @@ async def task_plan(db, project="p1", *, fact_ids=(), own_id="own", reviewed=Fal
     audit = await fixture_audit(
         db, project=project, text="🧭方案需要列明实施条件和服务范围。"
     )
+    if capture_v2:
+        from app.intelligence.capture_contract import CaptureConditions
+        from app.intelligence.models import (
+            AuditSample,
+            CapturedResponse,
+            PromptVersion,
+            SamplingAudit,
+        )
+        from app.models.models import PlatformResponseRecord, Prompt
+        from app.utils.timezone import utcnow
+
+        raw = await db.scalar(
+            select(PlatformResponseRecord).where(
+                PlatformResponseRecord.audit_id == audit.id
+            )
+        )
+        prompt = await db.get(Prompt, raw.prompt_id)
+        conditions = CaptureConditions().model_dump(by_alias=True)
+        version = PromptVersion(
+            project_id=project,
+            prompt_id=prompt.id,
+            text=prompt.text,
+            text_hash=digest(prompt.text.encode()),
+            category="custom",
+        )
+        db.add(version)
+        await db.flush()
+        sample = AuditSample(
+            project_id=project,
+            audit_id=audit.id,
+            prompt_version_id=version.id,
+            platform=raw.platform,
+            surface="app",
+            sample_index=1,
+            conditions=conditions,
+            condition_hash=stable_hash(["app", conditions]),
+            status="sealed",
+        )
+        db.add(sample)
+        await db.flush()
+        captured = CapturedResponse(
+            project_id=project,
+            sample_id=sample.id,
+            attempt_no=1,
+            text=raw.response_text,
+            content_hash=digest(raw.response_text.encode()),
+            observed_at=utcnow(),
+            payload={
+                "answer": {"text": raw.response_text, "status": "complete"},
+                "conditions": conditions,
+                "sourcePanel": {
+                    "status": "complete",
+                    "capturedCount": 0,
+                    "expectedCount": 0,
+                },
+                "sources": [],
+            },
+        )
+        db.add(captured)
+        await db.flush()
+        sample.selected_response_id = captured.id
+        db.add(
+            SamplingAudit(
+                project_id=project,
+                audit_id=audit.id,
+                idempotency_key=f"task-plan-capture-{audit.id}",
+                request_hash=stable_hash([audit.id]),
+                expected_samples=1,
+                max_attempts=3,
+            )
+        )
+        await db.flush()
     run = await prepare_run(db, project, audit.id, enrich=False)
     run.status = "partial"
     response = run.manifest["responses"][0]
@@ -261,7 +335,9 @@ async def test_revision_history_never_reuses_approval_and_retries_are_exact(db_s
         history[1]["payload"]["target"] == original and first.signature == old_signature
     )
     assert all(row["approval"]["historical_signature_valid"] for row in history)
-    assert any(row["field"] == "/title" for row in history[0]["changes_from_previous"]["task"])
+    assert any(
+        row["field"] == "/title" for row in history[0]["changes_from_previous"]["task"]
+    )
     assert (await plan_view(db_session, action, run))["approval_valid"]
     assert (
         history[0]["payload"]["target"]["task_pack"]["delivery"]["questions"]
@@ -563,7 +639,9 @@ async def test_selected_own_fact_withdrawal_invalidates_only_related_task(
 
 
 @pytest.mark.asyncio
-async def test_old_draft_does_not_revive_after_new_plan_is_approved(db_session, tmp_path, monkeypatch):
+async def test_old_draft_does_not_revive_after_new_plan_is_approved(
+    db_session, tmp_path, monkeypatch
+):
     from app.intelligence.drafts import authorize_draft, export_brief
     from tests.test_intelligence_drafts import fixture_draft
 
@@ -657,11 +735,29 @@ async def test_same_snapshot_fetch_is_stable_and_changed_related_source_is_stale
     from tests.test_intelligence_reviews import fixture_evidence
 
     run, evidence, _, _ = await fixture_evidence(db_session)
-    summary = {"diagnoses": [{"id": "a" * 64, "platform": "qwen", "prompt": "核对质保条件",
-        "response_ids": [run.manifest["responses"][0]["id"]], "source_ids": [run.manifest["sources"][0]["id"]],
-        "evidence_ids": [evidence.id], "action": {"task": "核实质保条件原文"}}]}
+    summary = {
+        "diagnoses": [
+            {
+                "id": "a" * 64,
+                "platform": "qwen",
+                "prompt": "核对质保条件",
+                "response_ids": [run.manifest["responses"][0]["id"]],
+                "source_ids": [run.manifest["sources"][0]["id"]],
+                "evidence_ids": [evidence.id],
+                "action": {"task": "核实质保条件原文"},
+            }
+        ]
+    }
     await persist_diagnoses(db_session, run, summary)
-    action = await create_plan(db_session, run, PlanRequest(diagnosisId=summary["diagnoses"][0]["record_id"], idempotencyKey="source-plan-123"), "owner")
+    action = await create_plan(
+        db_session,
+        run,
+        PlanRequest(
+            diagnosisId=summary["diagnoses"][0]["record_id"],
+            idempotencyKey="source-plan-123",
+        ),
+        "owner",
+    )
     await approve_plan(db_session, action, run, approval_request(), "owner", "owner")
     source = run.manifest["sources"][0]
     db_session.add(
@@ -691,7 +787,22 @@ def test_differently_named_registry_binding_to_used_entity_is_a_related_change()
     from app.intelligence.action_dependencies import identity_projection
 
     brand = {"id": "own", "name": "云衡", "entity_id": "used-entity"}
-    scope = {"entity_ids": ["used-entity"], "target_ids": ["registry:own"], "binding_keys": []}
+    scope = {
+        "entity_ids": ["used-entity"],
+        "target_ids": ["registry:own"],
+        "binding_keys": [],
+    }
     before = identity_projection({"brands": [brand]}, {}, {}, {}, scope)
-    after = identity_projection({"brands": [brand, {"id": "rival", "name": "完全不同的名称", "entity_id": "used-entity"}]}, {}, {}, {}, scope)
+    after = identity_projection(
+        {
+            "brands": [
+                brand,
+                {"id": "rival", "name": "完全不同的名称", "entity_id": "used-entity"},
+            ]
+        },
+        {},
+        {},
+        {},
+        scope,
+    )
     assert before != after and after["name_collisions"][0]["id"] == "rival"
