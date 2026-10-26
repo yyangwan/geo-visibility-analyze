@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
-revision = "citation_value_20261024"
+revision = "citation_execution_20261026"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -990,6 +990,7 @@ def upgrade():
     sa.ForeignKeyConstraint(['project_id', 'action_id'], ['intelligence_action_plans.project_id', 'intelligence_action_plans.id'], ),
     sa.ForeignKeyConstraint(['project_id', 'run_id'], ['intelligence_runs.project_id', 'intelligence_runs.id'], ),
     sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('project_id', 'action_id', 'id'),
     sa.UniqueConstraint('project_id', 'action_id', 'revision'),
     sa.UniqueConstraint('project_id', 'id'),
     sa.UniqueConstraint('project_id', 'idempotency_key')
@@ -1068,6 +1069,46 @@ def upgrade():
     sa.UniqueConstraint('project_id', 'idempotency_key')
     )
     op.create_index(op.f('ix_intelligence_published_assets_project_id'), 'intelligence_published_assets', ['project_id'], unique=False)
+    op.create_table('intelligence_action_executions',
+    sa.Column('action_id', sa.String(length=32), nullable=False),
+    sa.Column('revision_id', sa.String(length=32), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False),
+    sa.Column('snapshot', sa.JSON(), nullable=False),
+    sa.Column('signature', sa.String(length=64), nullable=False),
+    sa.Column('id', sa.String(length=32), nullable=False),
+    sa.Column('project_id', sa.String(length=50), nullable=False),
+    sa.Column('created_at', sa.DateTime().with_variant(mysql.DATETIME(fsp=6), 'mysql'), nullable=False),
+    sa.CheckConstraint('version >= 1', name='ck_action_execution_version'),
+    sa.ForeignKeyConstraint(['project_id', 'action_id', 'revision_id'], ['intelligence_action_plan_revisions.project_id', 'intelligence_action_plan_revisions.action_id', 'intelligence_action_plan_revisions.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('project_id', 'id'),
+    sa.UniqueConstraint('project_id', 'revision_id')
+    )
+    op.create_index(op.f('ix_intelligence_action_executions_project_id'), 'intelligence_action_executions', ['project_id'], unique=False)
+    op.create_table('intelligence_action_execution_events',
+    sa.Column('execution_id', sa.String(length=32), nullable=False),
+    sa.Column('version', sa.Integer(), nullable=False),
+    sa.Column('operation', sa.String(length=24), nullable=False),
+    sa.Column('actor_id', sa.String(length=200), nullable=False),
+    sa.Column('actor_role', sa.String(length=24), nullable=False),
+    sa.Column('reason', sa.Text(), nullable=False),
+    sa.Column('before', sa.JSON(), nullable=False),
+    sa.Column('after', sa.JSON(), nullable=False),
+    sa.Column('previous_signature', sa.String(length=64), nullable=False),
+    sa.Column('signature', sa.String(length=64), nullable=False),
+    sa.Column('idempotency_key', sa.String(length=100), nullable=False),
+    sa.Column('request_hash', sa.String(length=64), nullable=False),
+    sa.Column('id', sa.String(length=32), nullable=False),
+    sa.Column('project_id', sa.String(length=50), nullable=False),
+    sa.Column('created_at', sa.DateTime().with_variant(mysql.DATETIME(fsp=6), 'mysql'), nullable=False),
+    sa.CheckConstraint('version >= 1', name='ck_execution_event_version'),
+    sa.ForeignKeyConstraint(['project_id', 'execution_id'], ['intelligence_action_executions.project_id', 'intelligence_action_executions.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('project_id', 'execution_id', 'version'),
+    sa.UniqueConstraint('project_id', 'idempotency_key')
+    )
+    op.create_index('ix_execution_event_page', 'intelligence_action_execution_events', ['project_id', 'execution_id', 'version'], unique=False)
+    op.create_index(op.f('ix_intelligence_action_execution_events_project_id'), 'intelligence_action_execution_events', ['project_id'], unique=False)
     # ### end Alembic commands ###
 
 def downgrade():

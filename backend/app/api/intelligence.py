@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -663,6 +663,43 @@ async def action_revision_history(action_id: str, offset: int = Query(0, ge=0), 
     action = await scoped_action(db, user, action_id)
     return {"action_id": action.id, "current_revision": action.revision, "offset": offset, "limit": limit,
             "revisions": await revision_history(db, action, offset, limit)}
+
+
+from app.intelligence.execution import (
+    ExecutionRequest,
+    change_execution,
+    execution_events,
+    read_execution,
+)
+
+
+@router.get("/actions/{action_id}/execution")
+async def action_execution(action_id: str, revision: int = Query(ge=1), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action = await scoped_action(db, user, action_id)
+    return await read_execution(db, action, revision)
+
+
+@router.get("/actions/{action_id}/execution/events")
+async def action_execution_history(action_id: str, revision: int = Query(ge=1), before: int | None = Query(None, ge=1), limit: int = Query(20, ge=1, le=100), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action = await scoped_action(db, user, action_id)
+    return await execution_events(db, action, revision, before, limit)
+
+
+@router.post("/actions/{action_id}/execution", status_code=202)
+async def update_action_execution(action_id: str, data: ExecutionRequest, request: Request, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.semantics import stable_hash
+
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action_writer(user)
+    action = await scoped_action(db, user, action_id)
+    result = await change_execution(db, action, data, user, stable_hash(await request.json()))
+    await db.commit()
+    return result
 
 
 @router.post("/actions/{action_id}/revisions", status_code=202)

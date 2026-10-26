@@ -853,6 +853,7 @@ class ActionPlanRevision(Scoped, Base):
     __tablename__ = "intelligence_action_plan_revisions"
     __table_args__ = (
         UniqueConstraint("project_id", "id"),
+        UniqueConstraint("project_id", "action_id", "id"),
         UniqueConstraint("project_id", "action_id", "revision"),
         UniqueConstraint("project_id", "idempotency_key"),
         ForeignKeyConstraint(
@@ -875,5 +876,49 @@ class ActionPlanRevision(Scoped, Base):
     dependencies: Mapped[dict] = mapped_column(JSON, default=dict)
     actor_id: Mapped[str] = mapped_column(String(200))
     reason: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))
+
+
+class ActionExecution(Scoped, Base):
+    """Mutable execution projection, scoped to one immutable task revision."""
+
+    __tablename__ = "intelligence_action_executions"
+    __table_args__ = (
+        UniqueConstraint("project_id", "id"),
+        UniqueConstraint("project_id", "revision_id"),
+        ForeignKeyConstraint(["project_id", "action_id", "revision_id"],
+            ["intelligence_action_plan_revisions.project_id", "intelligence_action_plan_revisions.action_id", "intelligence_action_plan_revisions.id"]),
+        CheckConstraint("version >= 1", name="ck_action_execution_version"),
+    )
+    action_id: Mapped[str] = mapped_column(String(32))
+    revision_id: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    signature: Mapped[str] = mapped_column(String(64))
+
+
+class ActionExecutionEvent(Scoped, Base):
+    """Append-only named decisions and delivery snapshots; no publishing side effect."""
+
+    __tablename__ = "intelligence_action_execution_events"
+    __table_args__ = (
+        UniqueConstraint("project_id", "execution_id", "version"),
+        UniqueConstraint("project_id", "idempotency_key"),
+        ForeignKeyConstraint(["project_id", "execution_id"],
+            ["intelligence_action_executions.project_id", "intelligence_action_executions.id"]),
+        CheckConstraint("version >= 1", name="ck_execution_event_version"),
+        Index("ix_execution_event_page", "project_id", "execution_id", "version"),
+    )
+    execution_id: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer)
+    operation: Mapped[str] = mapped_column(String(24))
+    actor_id: Mapped[str] = mapped_column(String(200))
+    actor_role: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    before: Mapped[dict] = mapped_column(JSON)
+    after: Mapped[dict] = mapped_column(JSON)
+    previous_signature: Mapped[str] = mapped_column(String(64))
+    signature: Mapped[str] = mapped_column(String(64))
     idempotency_key: Mapped[str] = mapped_column(String(100))
     request_hash: Mapped[str] = mapped_column(String(64))
