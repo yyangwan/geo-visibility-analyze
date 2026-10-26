@@ -13,6 +13,7 @@ from app.intelligence.execution import (
     read_execution,
 )
 from app.intelligence.models import ActionExecution, ActionExecutionEvent
+from app.intelligence.project_context import ContextRequest, receive_context
 from app.intelligence.semantics import stable_hash
 from tests.test_intelligence_action_revisions import (
     approval_request,
@@ -75,10 +76,30 @@ async def test_read_does_not_initialize_and_follows_the_exact_revision(db_sessio
     _, action, _ = await task_plan(db_session)
     view = await read_execution(db_session, action, 1)
     assert view["version"] == 0 and view["snapshot"]["status"] == "not_started"
+    assert not view["plan_approval_valid"]
     assert not db_session.new and not await db_session.scalar(
         select(func.count()).select_from(ActionExecution)
     )
     assert (await execution_events(db_session, action, 1))["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_read_rechecks_current_plan_dependencies_without_execution_write(db_session):
+    _, action, _ = await arranged(db_session)
+    assert (await read_execution(db_session, action, 1))["plan_approval_valid"]
+    await receive_context(
+        db_session,
+        action.project_id,
+        ContextRequest(
+            version=2,
+            brands=[{"id": "own", "name": "另一品牌", "is_competitor": False}],
+        ),
+        "owner",
+    )
+    view = await read_execution(db_session, action, 1)
+    assert not view["plan_approval_valid"] and view["version"] == 1
+    assert view["snapshot"]["owner"]["id"] == "owner"
+    assert await db_session.scalar(select(func.count()).select_from(ActionExecutionEvent)) == 1
 
 
 @pytest.mark.asyncio
@@ -170,6 +191,7 @@ async def test_revision_change_preserves_old_delivery_but_starts_fresh(db_sessio
     )
     old = await read_execution(db_session, action, 1)
     assert not old["is_current"] and old["snapshot"]["status"] == "in_progress"
+    assert not old["plan_approval_valid"] and not new["plan_approval_valid"]
     assert (await change(db_session, action, start))["replayed"]
     with pytest.raises(HTTPException) as failure:
         await change(db_session, action, command("cancel", 2))

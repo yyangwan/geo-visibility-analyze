@@ -241,7 +241,13 @@ def projection(action, revision, head):
 async def read_execution(db, action, number):
     revision = await execution_revision(db, action, number)
     head = await head_for(db, action, revision)
-    return projection(action, revision, head)
+    value = projection(action, revision, head)
+    if value["is_current"]:
+        view = await plan_view(db, action, None)
+        value["plan_approval_valid"] = view["approval_valid"]
+    else:
+        value["plan_approval_valid"] = False
+    return value
 
 
 async def execution_events(db, action, number, before=None, limit=20):
