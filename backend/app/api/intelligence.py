@@ -1316,16 +1316,36 @@ async def list_runs(
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    query = select(IntelligenceRun).where(IntelligenceRun.project_id == project_id)
+    query = select(IntelligenceRun.id).where(IntelligenceRun.project_id == project_id)
     if audit_id is not None:
         query = query.where(IntelligenceRun.audit_id == audit_id)
-    rows = (
+    run_ids = (
         await db.scalars(
             query.order_by(
-                IntelligenceRun.created_at.desc(), IntelligenceRun.revision.desc()
+                IntelligenceRun.created_at.desc(),
+                IntelligenceRun.revision.desc(),
+                IntelligenceRun.id.desc(),
             ).limit(limit)
         )
     ).all()
+    # Keep immutable manifests and analysis JSON out of MySQL's sort buffer.
+    # Fetch the list projection without SQL sorting, then restore the ID order.
+    rows = (
+        await db.execute(
+            select(
+                IntelligenceRun.id,
+                IntelligenceRun.audit_id,
+                IntelligenceRun.revision,
+                IntelligenceRun.status,
+                IntelligenceRun.created_at,
+                IntelligenceRun.coverage,
+            ).where(
+                IntelligenceRun.project_id == project_id,
+                IntelligenceRun.id.in_(run_ids),
+            )
+        )
+    ).all() if run_ids else []
+    rows_by_id = {run.id: run for run in rows}
     return {
         "enabled": settings.intelligence_enabled,
         "runs": [
@@ -1337,7 +1357,8 @@ async def list_runs(
                 "created_at": run.created_at,
                 "coverage": run.coverage,
             }
-            for run in rows
+            for run_id in run_ids
+            if (run := rows_by_id.get(run_id)) is not None
         ],
     }
 
