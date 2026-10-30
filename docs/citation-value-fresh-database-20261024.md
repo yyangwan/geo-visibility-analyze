@@ -1,10 +1,10 @@
 # 价值分析 v3：空库初始化与本地验证
 
-本分支直接建立最新结构，schema identity 为 `citation_value_20261024`。不升级旧业务库、不复制历史审计、不提供旧镜像访问新结构的兼容层。以下验证在本地隔离 Docker 资源完成，未切换生产。
+本分支直接建立最新结构，当前 schema identity 为 `citation_execution_20261026`，共 60 张业务表。不升级旧业务库、不复制历史审计、不提供旧镜像访问新结构的兼容层。下列 2026-10-24 本地验证记录对应首轮 58 表基线；执行扩展验证见 [E03 实现记录](citation-value-execution-20261026.md)，本页不据此宣称已切换生产。
 
 ## 结构边界
 
-- 最新静态基线位于 `backend/alembic/value_schema/20261024_value_baseline.py`，覆盖全部 58 张已注册应用表。`alembic.ini` 只启用这一套基线；旧目录保留用于代码考证，不是升级链。
+- 最新静态基线位于 `backend/alembic/value_schema/20261024_value_baseline.py`，覆盖全部 60 张已注册应用表。`alembic.ini` 只启用这一套基线；旧目录保留用于代码考证，不是升级链。
 - `ContextAnalysis` 保存语境分析的版本和结果；`OwnedContentAsset` 保存自有材料修订与对象引用；`ActionPlanRevision` 保存任务计划的幂等修订。这些表已有项目隔离外键、修订/幂等唯一约束，业务接口会在后续里程碑接入。
 - `BrandFact` 允许“引用复核”和“自有材料修订”两个互斥来源分支。自有材料事实不需要伪造引用、提及实体或复核记录；项目、材料 ID 和版本必须匹配。数据库 CHECK/FK 同时约束。
 - 项目上下文增加 `business_preferences`。门户 Prisma JSON 默认 `{}`；新冻结回执将品牌和偏好一同递归规范化并签名，偏好变动产生新上下文版本。业务重要度不修改固定 30/30/20/20 评分规则。
@@ -21,7 +21,7 @@ python -m scripts.check_intelligence_image
 
 初始化器核对实际配置的库名和预期名称，拒绝任何非空旧结构；已是本基线时只读核验表/列后返回 `already_initialized`。基线也在执行 DDL 前拒绝已有应用表。没有 drop、旧库 upgrade 或 stamp 入口。MySQL DDL 可能不能事务回滚；初始化中断时保留现场，不以删除表修复。
 
-门户在独立空 PostgreSQL 中执行 `npx prisma db push`，再执行 Prisma generation；这不是对旧数据库运行迁移的指令。
+本地空库证明时，门户在独立 PostgreSQL 中执行 `npx prisma db push`，再执行 Prisma generation。2026-10-30 发布准备另补加法迁移 `20261030000000_add_business_preferences`，只为门户项目上下文增加默认 `{}` 的 JSONB 字段，保留账号、项目及身份；生产由门户不可变镜像执行 `prisma migrate deploy`，不在服务器运行 `db push`。
 
 仅限显式指定的 loopback 开发/测试库执行 API/worker 证明：
 
@@ -43,6 +43,8 @@ python -m scripts.check_value_database --expected-database <本地测试库名>
 
 凭证、完整数据回执及原始日志只在本地私有目录保存，不纳入 git。
 
-## 发布前仍需完成
+## 2026-10-30 发布准备
 
-生产发布脚本当前的 `intelligence_production` 固定库名与旧部署配置还未改为本轮独立空库目标。不要将本分支直接套入现有库运行。Q02 需要为新库、新配置及前一版本各自的库/配置指向制定并验证切换/回退，所有修改仍需本地 git、PR 和 CI。不需要旧镜像理解新表，也不以旧数据搬迁作为前置任务。
+本地部署代码已将 v3 目标固定为独立空库 `intelligence_value_20261030`，新配置存于 `.intelligence-value.env`；原 `.intelligence.env` 和旧库保留。发布初始化使用显式库名保护，active/previous 同时记录镜像、slot 及 env 路径，回退使用前版自己的库和配置，不让旧镜像理解新表。完整流程见[生产部署与回退](citation-intelligence-production-deploy.md)。
+
+本轮源码检查、部署回归、PR/CI、生产配置准备及实际切换仍以发布记录为准，本地实现不等于已部署。Q01/Q02 的独立语义、真实四平台采集、OSS 与客户行动价值闭环仍需验收；不以旧数据搬迁作为前置任务。

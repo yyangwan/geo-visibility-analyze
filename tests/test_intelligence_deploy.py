@@ -17,11 +17,15 @@ IMAGE_ROOT = "ghcr.io/yyangwan/geo-visibility-analyze"
 LEGACY_IMAGE = "sha256:" + "c" * 64
 
 
-def exercise(tmp_path, failure="", active=True, mode="deploy"):
+def exercise(tmp_path, failure="", active=True, mode="deploy", active_env=None, previous_env=None):
     checkout, state, nginx = (tmp_path / name for name in ["checkout", "state", "nginx"])
     for directory in [checkout, state, nginx]:
         directory.mkdir()
     (checkout / ".intelligence.env").write_text("# fake config\n", encoding="utf-8")
+    (checkout / ".intelligence-value.env").write_text("# fake new database config\n", encoding="utf-8")
+    for name, value in [("active-env", active_env), ("previous-env", previous_env)]:
+        if value is not None:
+            (state / name).write_text((checkout / value).as_posix() + "\n", encoding="utf-8")
     if active:
         initial_slot = "legacy" if active == "legacy" else "blue"
         initial_image = LEGACY_IMAGE if active == "legacy" else f"{IMAGE_ROOT}:{OLD}"
@@ -56,11 +60,12 @@ mv() {
   command mv "$@"
 }
 docker() {
+  printf 'config-env:%s\n' "${INTELLIGENCE_ENV_FILE:-none}" >> "$TRACE"
   printf 'docker:%s\n' "$*" >> "$TRACE"
   if [[ "$*" == 'image inspect '* ]]; then printf '%s\n' "$SHA"; return; fi
   if [[ "$*" == 'network inspect '* ]]; then return 0; fi
   if [[ "$*" == *'check_intelligence_deployment validate' ]]; then [[ "$FAILURE" != guard ]]; return; fi
-  if [[ "$*" == *'run --rm --no-deps migrate' ]]; then [[ "$FAILURE" != migration ]]; return; fi
+  if [[ "$*" == *'scripts.initialize_value_database'* ]]; then [[ "$FAILURE" != migration ]]; return; fi
   if [[ "$*" == *'ps -q api' ]]; then printf 'candidate-api\n'; return; fi
   if [[ "$*" == *'ps -q worker' ]]; then printf 'candidate-worker\n'; return; fi
   if [[ "$*" == 'inspect '* ]]; then
@@ -101,7 +106,7 @@ source "$1" "$MODE" "$SHA"
         env={**os.environ, "TRACE": trace.as_posix(), "SHA": SHA, "LEGACY_IMAGE": LEGACY_IMAGE, "FAILURE": failure, "MODE": "rollback" if mode == "rollback-legacy" else mode},
         capture_output=True, text=True, timeout=20, check=False,
     )
-    return result, trace.read_text(encoding="utf-8"), state, nginx
+    return result, trace.read_text(encoding="utf-8") if trace.exists() else "", state, nginx
 
 
 @pytest.mark.parametrize("failure", ["guard", "migration", "api", "worker", "nginx", "public", "state"])
@@ -117,8 +122,10 @@ def test_failure_preserves_active_release_and_restores_upstream(tmp_path, failur
     if failure == "state":
         assert (state / "active-image").read_text(encoding="utf-8").strip() == f"{IMAGE_ROOT}:{OLD}"
         assert not (state / "previous-slot").exists()
+        assert not (state / "active-env").exists()
+        assert not (state / "previous-env").exists()
     if failure == "guard":
-        assert not any(line.endswith("run --rm --no-deps migrate") for line in trace.splitlines())
+        assert "scripts.initialize_value_database" not in trace
 
 
 def test_first_install_failure_restores_absent_nginx_configuration(tmp_path):
@@ -142,6 +149,10 @@ def test_success_verifies_candidate_and_switched_revision_before_stopping_old_sl
     assert re.search(r"worker --since 2026-10-17 12:00:00 --worker-id [a-f0-9]{32}", trace)
     assert trace.index("public-health") < trace.index("stop worker api")
     assert "down" not in trace and "docker:pull" not in trace
+    assert (state / "active-env").read_text().strip().endswith("/.intelligence-value.env")
+    assert (state / "previous-env").read_text().strip().endswith("/.intelligence.env")
+    assert "scripts.initialize_value_database --expected-database intelligence_value_20261030" in trace
+    assert "alembic upgrade" not in trace
 
 
 def test_rollback_reuses_previous_sha_without_database_downgrade(tmp_path):
@@ -149,7 +160,34 @@ def test_rollback_reuses_previous_sha_without_database_downgrade(tmp_path):
     assert result.returncode == 0, result.stderr
     assert (state / "active-slot").read_text(encoding="utf-8").strip() == "green"
     assert "check_intelligence_deployment validate" in trace
-    assert not any(line.endswith("run --rm --no-deps migrate") for line in trace.splitlines())
+    assert "scripts.initialize_value_database" not in trace
+    assert (state / "active-env").read_text().strip().endswith("/.intelligence.env")
+
+
+def test_rollback_restores_the_previous_database_config_without_repointing_active_config(tmp_path):
+    result, trace, state, _ = exercise(tmp_path, mode="rollback", active_env=".intelligence-value.env")
+    assert result.returncode == 0, result.stderr
+    assert (state / "active-env").read_text().strip().endswith("/.intelligence.env")
+    assert (state / "previous-env").read_text().strip().endswith("/.intelligence-value.env")
+    lines = trace.splitlines()
+    candidate = next(i for i, line in enumerate(lines) if "check_intelligence_deployment validate" in line)
+    stopped = next(i for i, line in enumerate(lines) if "stop worker api" in line)
+    assert lines[candidate - 1].endswith("/.intelligence.env")
+    assert lines[stopped - 1].endswith("/.intelligence-value.env")
+    assert "scripts.initialize_value_database" not in trace
+
+
+def test_failed_state_write_restores_recorded_database_configuration(tmp_path):
+    result, _, state, _ = exercise(tmp_path, failure="state", active_env=".intelligence.env")
+    assert result.returncode != 0
+    assert (state / "active-env").read_text().strip().endswith("/.intelligence.env")
+    assert not (state / "previous-env").exists()
+
+
+def test_unknown_database_environment_pointer_is_rejected_before_docker(tmp_path):
+    result, trace, _, _ = exercise(tmp_path, active_env="unreviewed.env")
+    assert result.returncode != 0
+    assert not trace
 
 
 def test_first_release_records_running_legacy_as_rollback_target_without_stopping_it(tmp_path):

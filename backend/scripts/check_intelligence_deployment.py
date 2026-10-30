@@ -16,8 +16,8 @@ def guarded_database_url():
     from app.config import settings
 
     url = make_url(settings.database_url)
-    if url.drivername != "mysql+aiomysql" or url.database != "intelligence_production":
-        raise RuntimeError("Refusing a database outside intelligence_production")
+    if url.drivername != "mysql+aiomysql" or url.database != "intelligence_value_20261030":
+        raise RuntimeError("Refusing a database outside intelligence_value_20261030")
     if os.getenv("AISCOPE_DEBUG") != "0":
         raise RuntimeError("Production requires explicit AISCOPE_DEBUG=0")
     if not settings.intelligence_enabled:
