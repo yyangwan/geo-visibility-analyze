@@ -36,13 +36,23 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: sudo apt-get update && sudo apt-get install -y libpango-1.0-0 libpangoft2-1.0-0
-      - run: python -m pip install -r requirements.txt ruff==0.17.0
-      - run: python -m compileall -q app scripts/check_intelligence_image.py scripts/check_intelligence_deployment.py
-      - run: ruff check app/intelligence app/api/intelligence.py scripts/check_intelligence_image.py scripts/check_intelligence_deployment.py tests/test_intelligence*.py --ignore B008,SIM117,BLE001
-      - name: Reviewed empty-database migration
-        run: python -m alembic upgrade head
+      - run: python -m pip install -r requirements.txt ruff==0.17.0 PyYAML==6.0.3
+      - run: python -m compileall -q app scripts/check_intelligence_image.py scripts/check_intelligence_deployment.py scripts/initialize_value_database.py scripts/check_value_database.py scripts/freeze_schema.py
+      - run: ruff check app/intelligence app/api/intelligence.py app/api/intelligence_owned.py scripts/check_intelligence_image.py scripts/check_intelligence_deployment.py scripts/initialize_value_database.py scripts/check_value_database.py scripts/freeze_schema.py tests/test_intelligence*.py --ignore B008,SIM117,BLE001
+      - name: Initialize reviewed fresh schema
+        run: python -m scripts.initialize_value_database --expected-database intelligence_ci
+      - name: Fresh database constraints and API/worker startup
+        env:
+          AISCOPE_INTELLIGENCE_ENABLED: '1'
+          AISCOPE_INTELLIGENCE_ENVIRONMENT: test
+          AISCOPE_INTELLIGENCE_BLOB_BACKEND: local
+          AISCOPE_INTELLIGENCE_BLOB_ROOT: /tmp/value-database-proof
+          AISCOPE_INTELLIGENCE_MODEL_REQUEST_LIMIT: '0'
+        run: python -m scripts.check_value_database --expected-database intelligence_ci
       - name: Full backend regression and real-MySQL concurrency
         run: python -m pytest tests -q --tb=short
+      - name: Verify production switch and database rollback
+        run: python -m pytest ../tests/test_intelligence_deploy.py -q --tb=short
   container:
     name: Validate and publish shared API and worker image
     needs: source

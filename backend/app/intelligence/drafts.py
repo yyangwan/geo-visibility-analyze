@@ -1,42 +1,41 @@
-"""Formal content-draft authorization and a server-derived evidence Brief v2."""
+"""Named content authorization binds the exact TaskPack revision and own facts (v3)."""
 
 import hashlib
 import hmac
-from datetime import UTC
-from typing import Literal
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import HTTPException
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    ValidationError,
+)
 from sqlalchemy import select
 
 from app.config import settings
-from app.intelligence.actions import plan_view, stamp
-from app.intelligence.capture_contract import CaptureConditions
-from app.intelligence.models import (
-    AuditIntelligenceState,
-    BrandFact,
-    ClaimEvidence,
-    ClaimReview,
-    DraftApproval,
-    IntelligenceRun,
+from app.intelligence.brief_contracts import (
+    CHANNELS,
+    EvidenceBriefV3,
+    FrozenConditions,
+    OwnFact,
 )
-from app.intelligence.refresh import state_for_audit
-from app.intelligence.reviews import add_event, evidence_material, fact_view
+from app.intelligence.capture_contract import CaptureConditions
+from app.intelligence.models import ActionPlan, DraftApproval, OwnedContentAsset
 from app.intelligence.semantics import stable_hash
 from app.utils.timezone import utc_isoformat, utcnow
 
-CHANNELS = Literal[
-    "wechat", "weibo", "xiaohongshu", "douyin", "website", "zhihu", "toutiao"
-]
 
-
-class Strict(BaseModel):
+class DraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-
-class DraftRequest(Strict):
-    expected_version: int = Field(alias="expectedVersion", ge=0)
-    fact_ids: list[str] = Field(alias="factIds", min_length=1, max_length=20)
+    expected_version: StrictInt = Field(alias="expectedVersion", ge=0)
+    expected_revision: StrictInt = Field(alias="expectedRevision", ge=1)
+    fact_ids: list[str] = Field(alias="factIds", min_length=1, max_length=100)
+    facts_scope_reviewed: StrictBool = Field(alias="factsScopeReviewed")
     channel: CHANNELS
     title: str = Field(min_length=5, max_length=200)
     reason: str = Field(min_length=5, max_length=2000)
@@ -46,59 +45,10 @@ class DraftRequest(Strict):
     )
 
 
-class FactSource(Strict):
-    citationId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    snapshotId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    url: str = Field(min_length=1, max_length=4096, pattern=r"^https?://")
-
-
-class DraftFact(Strict):
-    id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    version: int = Field(ge=1)
-    entityId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    statement: str = Field(min_length=1, max_length=2000)
-    scope: str = Field(min_length=5, max_length=1000)
-    validFrom: AwareDatetime
-    validUntil: AwareDatetime
-    source: FactSource
-
-
-class DraftTarget(Strict):
-    platform: Literal["qwen", "deepseek", "doubao", "kimi", "hunyuan"]
-    promptHash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    prompt: str = Field(min_length=1, max_length=5000)
-    conditions: CaptureConditions = Field(default_factory=CaptureConditions)
-
-
-class DraftExecution(Strict):
-    channel: CHANNELS
-    mode: Literal["generate_draft", "manual_task"]
-
-
-class DraftAuthorization(Strict):
-    id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    version: int = Field(ge=1)
-    scope: Literal["content_draft"]
-    signature: str = Field(pattern=r"^[a-f0-9]{64}$")
-    expiresAt: AwareDatetime
-
-
-class EvidenceBriefV2(Strict):
-    schemaVersion: Literal[2]
-    projectId: str = Field(min_length=1, max_length=50)
-    runId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    actionId: str = Field(pattern=r"^[a-f0-9]{32}$")
-    title: str = Field(min_length=5, max_length=200)
-    execution: DraftExecution
-    aiTargets: list[DraftTarget] = Field(min_length=1, max_length=5)
-    facts: list[DraftFact] = Field(min_length=1, max_length=20)
-    approval: DraftAuthorization
-    publicationAllowed: Literal[False]
-
-
 def grant_signature(grant):
     value = stable_hash(
         [
+            "evidence-brief-v3",
             grant.id,
             grant.action_id,
             grant.version,
@@ -115,82 +65,147 @@ def grant_signature(grant):
     ).hexdigest()
 
 
-async def selected_facts(db, action, run, ids):
-    if len(set(ids)) != len(ids):
-        raise HTTPException(422, "Fact IDs must be unique")
+async def selected_facts(db, action, run, ids, *, lock=False, blobs=None):
+    from app.intelligence.blob import IntegrityError
+    from app.intelligence.fact_qualification import task_fact
+    from app.intelligence.value_contracts import TaskPackV2
+
+    if not action.target.get("task_pack"):
+        raise HTTPException(409, "Content requires a complete TaskPack v2 revision")
+    pack = TaskPackV2.model_validate(action.target["task_pack"])
+    if tuple(ids) != pack.own_fact_ids or not ids or len(set(ids)) != len(ids):
+        raise HTTPException(
+            409, "Select facts in a new action revision before content authorization"
+        )
     result = []
-    for fact_id in ids:
-        fact = await db.scalar(
-            select(BrandFact).where(
-                BrandFact.project_id == run.project_id, BrandFact.id == fact_id
+    for key in ids:
+        try:
+            fact = await task_fact(
+                db, run, pack, key, lock=lock, read=True, blobs=blobs
             )
-        )
-        if fact is None:
-            raise HTTPException(404, "Fact outside project")
-        if (await fact_view(db, fact))["status"] != "valid":
-            raise HTTPException(409, "Fact no longer valid")
-        review = await db.scalar(
-            select(ClaimReview).where(
-                ClaimReview.project_id == run.project_id,
-                ClaimReview.id == fact.review_id,
-            )
-        )
-        evidence = await db.scalar(
-            select(ClaimEvidence).where(
-                ClaimEvidence.project_id == run.project_id,
-                ClaimEvidence.id == review.evidence_id,
-            )
-        )
-        origin = await db.scalar(
-            select(IntelligenceRun).where(
-                IntelligenceRun.project_id == run.project_id,
-                IntelligenceRun.id == review.run_id,
-            )
-        )
-        _, citation, _ = await evidence_material(db, origin, evidence)
-        target_source = next(
-            (
-                source
-                for source in run.manifest["sources"]
-                if source["id"] == citation["id"]
-            ),
-            None,
-        )
-        if (
-            not target_source
-            or target_source["snapshot_id"] != citation["snapshot_id"]
-            or citation["id"] not in action.target.get("source_ids", [])
-            or citation["platform"] != action.target.get("platform")
-        ):
+        except IntegrityError as error:
             raise HTTPException(
-                409, "Facts must belong to this platform target and snapshot"
+                409, "Saved fact material integrity could not be verified"
+            ) from error
+        if not fact["eligible"]:
+            raise HTTPException(
+                409, "Selected own fact is stale, out of scope or unavailable"
+            )
+        url = None
+        if fact["source_kind"] == "owned_asset_revision":
+            asset = await db.scalar(
+                select(OwnedContentAsset).where(
+                    OwnedContentAsset.project_id == run.project_id,
+                    OwnedContentAsset.id == fact["source_ref"]["asset_id"],
+                )
+            )
+            url = asset.original_url if asset else None
+        else:
+            from app.intelligence.models import IntelligenceRun
+
+            origin = await db.scalar(
+                select(IntelligenceRun).where(
+                    IntelligenceRun.project_id == run.project_id,
+                    IntelligenceRun.id == fact["source_ref"]["evidence"]["run_id"],
+                )
+            )
+            url = (
+                next(
+                    (
+                        row.get("url")
+                        for row in origin.manifest["sources"]
+                        if row["id"] == fact["source_ref"]["citation_id"]
+                    ),
+                    None,
+                )
+                if origin
+                else None
             )
         result.append(
-            {
-                "id": fact.id,
-                "version": fact.version,
-                "entityId": fact.entity_id,
-                "statement": fact.statement,
-                "scope": fact.scope,
-                "validFrom": utc_isoformat(fact.valid_from),
-                "validUntil": utc_isoformat(fact.valid_until),
-                "source": {
-                    "citationId": citation["id"],
-                    "snapshotId": citation["snapshot_id"],
-                    "url": citation["url"],
-                },
-            }
+            OwnFact.model_validate(
+                {
+                    "id": fact["id"],
+                    "version": fact["version"],
+                    "ownTargetId": pack.own_target_id,
+                    "entityId": fact["entity_id"],
+                    "statement": fact["statement"],
+                    "scope": fact["scope"],
+                    "validFrom": fact["valid_from"],
+                    "validUntil": fact["valid_until"],
+                    "source": fact["source_ref"],
+                    "referenceUrl": url,
+                }
+            ).model_dump(mode="json")
         )
     return result
 
 
-async def authorize_draft(db, action, run, data, actor):
-    state = await state_for_audit(db, run.project_id, run.audit_id)
+def action_binding(revision):
+    pack = revision.payload["target"]["task_pack"]
+    return {
+        "id": revision.id,
+        "revision": revision.revision,
+        "signature": revision.signature,
+        "dependencySignature": stable_hash(revision.dependencies),
+        "taskKey": revision.task_key,
+        "taskSignature": stable_hash(pack),
+    }
+
+
+def ai_targets(pack, run):
+    values = []
+    for row in pack.ai_targets:
+        question = next(
+            q for q in pack.delivery.questions if q.prompt_hash == row.prompt_hash
+        )
+        observations = [
+            {"responseId": response["id"], "conditions": brief_conditions(response)}
+            for response in run.manifest["responses"]
+            if response["platform"] == row.platform
+            and response["prompt_hash"] == row.prompt_hash
+        ]
+        values.append(
+            {
+                "platform": row.platform,
+                "promptHash": row.prompt_hash,
+                "prompt": question.text,
+                "scenarioId": row.scenario_id,
+                "dimensions": list(row.dimensions),
+                "observations": observations,
+            }
+        )
+    return values
+
+
+def brief_conditions(response):
+    """Translate observed capture-v2 fields into the frozen Brief wire contract."""
+    observed = response.get("conditions") or {}
+    if response.get("prompt_version_id"):
+        observed = {
+            **CaptureConditions.model_validate(observed).model_dump(),
+            "surface": response.get("surface"),
+        }
+    return FrozenConditions.model_validate(observed).model_dump(mode="json")
+
+
+async def authorize_draft(db, action, run, data, actor, *, blobs=None):
+    from app.intelligence.action_revisions import current_revision, lock_action_context
+    from app.intelligence.actions import plan_view
+    from app.intelligence.value_contracts import TaskPackV2
+
+    _, actual_run = await current_revision(db, action)
+    await lock_action_context(db, actual_run)
+    action = await db.scalar(
+        select(ActionPlan)
+        .where(ActionPlan.project_id == action.project_id, ActionPlan.id == action.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     request_hash = stable_hash([action.id, data.model_dump(mode="json"), actor])
     previous = await db.scalar(
         select(DraftApproval)
         .where(
-            DraftApproval.project_id == run.project_id,
+            DraftApproval.project_id == action.project_id,
             DraftApproval.idempotency_key == data.idempotency_key,
         )
         .with_for_update()
@@ -199,75 +214,79 @@ async def authorize_draft(db, action, run, data, actor):
         if previous.request_hash != request_hash:
             raise HTTPException(409, "Draft approval key conflict")
         return previous
+    revision, run = await current_revision(db, action, lock=True)
     latest = await db.scalar(
         select(DraftApproval.version)
         .where(
-            DraftApproval.project_id == run.project_id,
+            DraftApproval.project_id == action.project_id,
             DraftApproval.action_id == action.id,
         )
         .order_by(DraftApproval.version.desc())
-        .with_for_update()
         .limit(1)
+        .with_for_update()
     )
-    if (latest or 0) != data.expected_version:
-        raise HTTPException(409, "Draft approval version changed")
-    if action.target.get("kind") not in (
-        "negative_observation",
-        "claim_review",
-        "source_concentration",
+    if (
+        revision.revision != data.expected_revision
+        or (latest or 0) != data.expected_version
     ):
-        raise HTTPException(
-            409, "Collection and identity tasks cannot become content Briefs"
-        )
+        raise HTTPException(409, "Action or draft approval version changed")
+    if (
+        not actor
+        or not data.facts_scope_reviewed
+        or min(len(data.reason.strip()), len(data.title.strip())) < 5
+    ):
+        raise HTTPException(422, "Named scope review and rationale are required")
     if not (await plan_view(db, action, run))["approval_valid"]:
         raise HTTPException(409, "Current investigation plan approval required")
-    facts = await selected_facts(db, action, run, data.fact_ids)
-    expiry = data.expires_at.astimezone(UTC).replace(tzinfo=None)
-    if (
-        expiry <= utcnow()
-        or any(expiry > parse_utc(fact["validUntil"]) for fact in facts)
-        or len(data.reason.strip()) < 5
-        or len(data.title.strip()) < 5
+    if not action.target.get("task_pack"):
+        raise HTTPException(409, "Content requires a complete TaskPack v2")
+    pack = TaskPackV2.model_validate(action.target["task_pack"])
+    if pack.intent in ("material_verification", "channel_outreach") or any(
+        row.scenario_id == "unreviewed" for row in pack.ai_targets
     ):
         raise HTTPException(
-            422, "Approval requires rationale and expiry within fact validity"
+            409,
+            "Review investigation intent and original questions before content creation",
         )
-    value, fresh = await stamp(db, run, state)
-    if not fresh:
-        raise HTTPException(409, "Draft evidence stale")
+    facts = await selected_facts(db, action, run, data.fact_ids, lock=True, blobs=blobs)
+    expiry = data.expires_at.astimezone(UTC).replace(tzinfo=None)
+    if expiry <= utcnow() or any(
+        expiry > parse_utc(fact["validUntil"]) for fact in facts
+    ):
+        raise HTTPException(422, "Approval expiry must be within current fact validity")
+    target = revision.payload["target"]
     payload = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "projectId": run.project_id,
         "runId": run.id,
         "actionId": action.id,
         "title": data.title.strip(),
+        "actionRevision": action_binding(revision),
+        "taskPack": pack.model_dump(mode="json"),
         "execution": {
             "channel": data.channel,
             "mode": "generate_draft"
             if data.channel in ("wechat", "weibo", "xiaohongshu", "douyin")
             else "manual_task",
         },
-        "aiTargets": [
-            {
-                "platform": action.target["platform"],
-                "promptHash": action.target["prompt_hash"],
-                "prompt": action.target["prompt"],
-                "conditions": action.target.get("conditions", {}),
-            }
-        ],
-        "facts": facts,
+        "aiTargets": ai_targets(pack, run),
+        "diagnosticContext": {
+            "observedFacts": target.get("observed_facts", []),
+            "hypotheses": target.get("hypotheses", []),
+            "unknowns": target.get("unknowns", []),
+            "counterevidence": target.get("counterevidence", []),
+            "use": "diagnostic_only",
+        },
+        "ownFacts": facts,
         "publicationAllowed": False,
     }
-    # Validate every bound, never truncate a fact or prompt to fit the consumer.
-    from uuid import uuid4
-
     grant = DraftApproval(
         id=uuid4().hex,
         project_id=run.project_id,
         action_id=action.id,
         version=data.expected_version + 1,
         payload=payload,
-        input_stamp=value,
+        input_stamp=stable_hash([revision.signature, facts]),
         actor_id=actor,
         reason=data.reason.strip(),
         expires_at=expiry,
@@ -277,19 +296,18 @@ async def authorize_draft(db, action, run, data, actor):
     )
     grant.signature = grant_signature(grant)
     try:
-        EvidenceBriefV2.model_validate(grant_payload(grant))
+        EvidenceBriefV3.model_validate(grant_payload(grant))
     except ValidationError as error:
         raise HTTPException(
-            422,
-            "Evidence Brief exceeds contract bounds; refine the task without truncation",
+            422, "Evidence Brief exceeds v3 bounds; refine the task without truncation"
         ) from error
+    from app.intelligence.reviews import add_event
+
     await add_event(db, grant)
     return grant
 
 
 def parse_utc(value):
-    from datetime import datetime
-
     return datetime.fromisoformat(value).astimezone(UTC).replace(tzinfo=None)
 
 
@@ -306,48 +324,46 @@ def grant_payload(grant):
     }
 
 
-async def export_brief(db, grant, action, run):
-    # Export is read-only: missing context must not be silently created by a GET.
-    state = await db.scalar(
-        select(AuditIntelligenceState).where(
-            AuditIntelligenceState.project_id == run.project_id,
-            AuditIntelligenceState.audit_id == run.audit_id,
-        )
-    )
-    newest_run = await db.scalar(
-        select(IntelligenceRun.id)
-        .where(
-            IntelligenceRun.project_id == run.project_id,
-            IntelligenceRun.audit_id == run.audit_id,
-        )
-        .order_by(IntelligenceRun.revision.desc())
-        .limit(1)
-    )
-    if state is None or newest_run != run.id or run.status not in ("ready", "partial"):
-        raise HTTPException(409, "Current completed evidence context required")
-    value, fresh = await stamp(db, run, state)
+async def export_brief(db, grant, action, run, *, blobs=None):
+    from app.intelligence.action_revisions import current_revision
+    from app.intelligence.actions import plan_view
+
+    revision, run = await current_revision(db, action)
     latest = await db.scalar(
         select(DraftApproval.id)
         .where(
-            DraftApproval.project_id == run.project_id,
+            DraftApproval.project_id == action.project_id,
             DraftApproval.action_id == action.id,
         )
         .order_by(DraftApproval.version.desc())
         .limit(1)
     )
     if (
-        not fresh
+        not action.target.get("task_pack")
+        or grant.payload.get("schemaVersion") != 3
+        or grant.payload.get("actionRevision") != action_binding(revision)
         or latest != grant.id
         or grant.expires_at <= utcnow()
-        or grant.input_stamp != value
         or not hmac.compare_digest(grant.signature, grant_signature(grant))
     ):
-        raise HTTPException(409, "Content draft approval expired or stale")
-    if not (await plan_view(db, action, run, state=state))["approval_valid"]:
-        raise HTTPException(409, "Plan approval stale")
+        raise HTTPException(
+            409,
+            "Content authorization expired, superseded or bound to another revision",
+        )
+    if not (await plan_view(db, action, run))["approval_valid"]:
+        raise HTTPException(409, "Current plan approval is stale")
     facts = await selected_facts(
-        db, action, run, [fact["id"] for fact in grant.payload["facts"]]
+        db, action, run, [fact["id"] for fact in grant.payload["ownFacts"]], blobs=blobs
     )
-    if facts != grant.payload["facts"]:
-        raise HTTPException(409, "Approved fact payload changed")
-    return EvidenceBriefV2.model_validate(grant_payload(grant)).model_dump(mode="json")
+    if facts != grant.payload["ownFacts"] or grant.input_stamp != stable_hash(
+        [revision.signature, facts]
+    ):
+        raise HTTPException(409, "Approved own fact material changed")
+    try:
+        return EvidenceBriefV3.model_validate(grant_payload(grant)).model_dump(
+            mode="json", by_alias=True
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            409, "Content authorization contract integrity changed"
+        ) from error

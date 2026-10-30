@@ -7,10 +7,20 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import settings
+from app.intelligence.analysis_coverage import segment_processed
 from app.intelligence.blob import digest
 from app.intelligence.brand_evaluation import summarize_answer_scores
 from app.intelligence.brand_signals import summarize_brand_signals
+from app.intelligence.contextual_analysis import analyze_context
 from app.intelligence.evidence import align_claims, verify_pair
+from app.intelligence.model_budget import (
+    budget_status,
+    estimate_tokens,
+    recover_reservations,
+    reserve,
+    settle,
+)
+from app.intelligence.model_policy import structured_options
 from app.intelligence.models import (
     ContentSegment,
     EntityMention,
@@ -25,13 +35,16 @@ from app.intelligence.models import (
 from app.intelligence.queue import JobQueue, Lease
 from app.intelligence.semantics import (
     SEGMENT_VERSION,
+    SYSTEM,
     SemanticOutputError,
     analysis_signature,
     analyze_text,
     chunks,
+    extraction_signature,
     safe_validation_fields,
     stable_hash,
 )
+from app.intelligence.source_quality import assess_text, usable_snapshot
 from app.intelligence.sources import SourceBlocked, SourceUnavailable, capture_source
 from app.utils.timezone import utcnow
 
@@ -45,6 +58,7 @@ class Pipeline:
         capture=capture_source,
         analyze=analyze_text,
         verify=verify_pair,
+        contextualize=analyze_context,
     ):
         self.queue, self.blobs, self.capture, self.analyze = (
             queue,
@@ -53,22 +67,84 @@ class Pipeline:
             analyze,
         )
         self.verify = verify
+        self.contextualize = contextualize
 
-    async def reserve_model_request(self, lease):
-        allowed = False
+    async def fetch_owned_asset(self, lease):
+        from app.intelligence.owned_assets import fetch_owned_asset
 
-        async def reserve(db):
-            nonlocal allowed
+        await fetch_owned_asset(self, lease)
+
+    async def reserve_model_request(
+        self, lease, *, phase, messages, max_output, subject_id
+    ):
+        receipt = None
+
+        async def record(db):
+            nonlocal receipt
             from app.intelligence.models import AnalysisJob
 
             job = await db.get(AnalysisJob, lease.id)
-            used = job.payload.get("model_requests", 0)
-            allowed = used < settings.intelligence_model_request_limit
-            if allowed:
-                job.payload = {**job.payload, "model_requests": used + 1}
+            run = await db.get(IntelligenceRun, lease.run_id)
+            if not run or run.project_id != lease.project_id:
+                raise LookupError("Run not found")
+            ledger, receipt, reason = reserve(
+                job.payload.get("model_budget"),
+                run.manifest["analysis_budget"],
+                phase,
+                estimate_tokens(messages, max_output),
+                subject_id,
+            )
+            deferred = {**job.payload.get("model_deferred", {})}
+            key = stable_hash([phase, subject_id])
+            if receipt:
+                ledger["receipts"][receipt]["lease_version"] = lease.version
+                deferred.pop(key, None)
+            else:
+                deferred[key] = {
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "reason": reason,
+                }
+            job.payload = {
+                **job.payload,
+                "model_budget": ledger,
+                "model_requests": len(ledger["receipts"]),
+                "model_deferred": deferred,
+            }
 
-        await self.queue.checkpoint(lease, reserve)
-        return allowed
+        await self.queue.checkpoint(lease, record)
+        return receipt
+
+    async def settle_model_request(self, lease, receipt, usage):
+        async def record(db):
+            await self.record_model_usage(db, lease, receipt, usage)
+
+        await self.queue.checkpoint(lease, record)
+
+    async def record_model_usage(self, db, lease, receipt, usage):
+        from app.intelligence.models import AnalysisJob
+
+        job = await db.get(AnalysisJob, lease.id)
+        job.payload = {
+            **job.payload,
+            "model_budget": settle(job.payload["model_budget"], receipt, usage),
+        }
+
+    async def record_model_deferral(self, db, lease, phase, subject_id, reason):
+        from app.intelligence.models import AnalysisJob
+
+        job = await db.get(AnalysisJob, lease.id)
+        job.payload = {
+            **job.payload,
+            "model_deferred": {
+                **job.payload.get("model_deferred", {}),
+                stable_hash([phase, subject_id]): {
+                    "phase": phase,
+                    "subject_id": subject_id,
+                    "reason": reason,
+                },
+            },
+        }
 
     async def fetch_document(self, lease: Lease):
         audit_id = int(lease.payload["audit_id"])
@@ -129,6 +205,7 @@ class Pipeline:
                     raise
                 continue
             body_hash = digest(captured.text.encode())
+            quality = assess_text(captured.text)
             representation = stable_hash(
                 [
                     body_hash,
@@ -137,6 +214,7 @@ class Pipeline:
                     captured.completeness,
                     "public-http",
                     captured.final_url,
+                    quality,
                 ]
             )
             prefix = (
@@ -157,6 +235,7 @@ class Pipeline:
                 body_hash=body_hash,
                 text_blob=text_blob,
                 raw_blob=raw_blob,
+                quality=quality,
             ):
                 # The document lock serializes shared-snapshot insertion across audits.
                 await db.scalar(
@@ -186,6 +265,7 @@ class Pipeline:
                         raw_sha256=raw_blob.sha256,
                         completeness=captured.completeness,
                         extractor_version=captured.extractor_version,
+                        quality=quality,
                     )
                     db.add(snapshot)
                     await db.flush()
@@ -235,6 +315,7 @@ class Pipeline:
         api_key, base_url, model = settings.get_analysis_llm_config()
         if analysis_signature(model, base_url) != signature:
             raise ValueError("Analysis configuration changed; create a new run")
+        text_signature = extraction_signature(model, base_url)
         owners = [
             ("answer", item["id"], item["text"])
             for item in manifest["responses"]
@@ -250,7 +331,11 @@ class Pipeline:
             if item["title"] or item["snippet"]
         ]
         for snapshot_id in sorted(
-            {item["snapshot_id"] for item in manifest["sources"] if item["snapshot_id"]}
+            {
+                item["snapshot_id"]
+                for item in manifest["sources"]
+                if usable_snapshot(item)
+            }
         ):
             async with self.queue.sessions() as db:
                 snapshot = await db.scalar(
@@ -269,6 +354,17 @@ class Pipeline:
             owners.append(("snapshot", snapshot_id, text))
 
         async def segment_all(db):
+            from app.intelligence.models import AnalysisJob
+
+            job = await db.get(AnalysisJob, lease.id)
+            ledger = job.payload.get("model_budget") or {
+                "policy": manifest["analysis_budget"],
+                "receipts": {},
+            }
+            job.payload = {
+                **job.payload,
+                "model_budget": recover_reservations(ledger, lease.version),
+            }
             current = await db.get(IntelligenceRun, lease.run_id)
             current.status = "running"
             for kind, owner_id, text in owners:
@@ -332,16 +428,25 @@ class Pipeline:
                         select(SemanticCache).where(
                             SemanticCache.project_id == lease.project_id,
                             SemanticCache.segment_hash == segment.segment_hash,
-                            SemanticCache.signature == signature,
+                            SemanticCache.signature == text_signature,
                         )
                     )
                 result, usage, status, diagnostic = None, {}, "deferred", None
+                receipt = None
                 if cache:
                     result, usage, status = cache.result, cache.usage, "completed"
                     status = "partial" if result.get("rejected_spans") else "completed"
                 elif api_key:
-                    allowed = await self.reserve_model_request(lease)
-                    if allowed:
+                    receipt = await self.reserve_model_request(
+                        lease,
+                        phase="answer_extraction"
+                        if kind == "answer"
+                        else "source_extraction",
+                        messages=[SYSTEM, segment.text],
+                        max_output=structured_options(base_url, model)["max_tokens"],
+                        subject_id=segment.id,
+                    )
+                    if receipt:
                         try:
                             result, usage = await self.analyze(
                                 segment.text, api_key, base_url, model
@@ -352,6 +457,7 @@ class Pipeline:
                                 else "completed"
                             )
                         except (SemanticOutputError, ValidationError) as error:
+                            usage = getattr(error, "usage", {})
                             status = "failed"
                             diagnostic = {
                                 "segment_id": segment.id,
@@ -360,6 +466,9 @@ class Pipeline:
                                 if isinstance(error, SemanticOutputError)
                                 else safe_validation_fields(error),
                             }
+                        except Exception:
+                            await self.settle_model_request(lease, receipt, None)
+                            raise
 
                 async def apply(
                     db,
@@ -368,7 +477,38 @@ class Pipeline:
                     usage=usage,
                     status=status,
                     diagnostic=diagnostic,
+                    receipt=receipt,
+                    kind=kind,
                 ):
+                    if receipt:
+                        await self.record_model_usage(db, lease, receipt, usage)
+                    if status == "deferred" and not api_key:
+                        await self.record_model_deferral(
+                            db,
+                            lease,
+                            "answer_extraction"
+                            if kind == "answer"
+                            else "source_extraction",
+                            segment.id,
+                            "analysis_provider_unconfigured",
+                        )
+                    elif status != "deferred":
+                        from app.intelligence.models import AnalysisJob
+
+                        job = await db.get(AnalysisJob, lease.id)
+                        deferred = {**job.payload.get("model_deferred", {})}
+                        deferred.pop(
+                            stable_hash(
+                                [
+                                    "answer_extraction"
+                                    if kind == "answer"
+                                    else "source_extraction",
+                                    segment.id,
+                                ]
+                            ),
+                            None,
+                        )
+                        job.payload = {**job.payload, "model_deferred": deferred}
                     if diagnostic:
                         from app.intelligence.models import AnalysisJob
 
@@ -388,14 +528,14 @@ class Pipeline:
                             select(SemanticCache).where(
                                 SemanticCache.project_id == lease.project_id,
                                 SemanticCache.segment_hash == segment.segment_hash,
-                                SemanticCache.signature == signature,
+                                SemanticCache.signature == text_signature,
                             )
                         )
                         if cache is None:
                             cache = SemanticCache(
                                 project_id=lease.project_id,
                                 segment_hash=segment.segment_hash,
-                                signature=signature,
+                                signature=text_signature,
                                 result=result,
                                 usage=usage,
                             )
@@ -470,6 +610,9 @@ class Pipeline:
 
                 await self.queue.checkpoint(lease, apply)
 
+        from app.intelligence.context_runtime import analyze_run_contexts
+
+        await analyze_run_contexts(self, lease, manifest, api_key, base_url, model)
         alignment = await align_claims(self, lease, manifest, api_key, base_url, model)
 
         async def publish(db):
@@ -485,11 +628,21 @@ class Pipeline:
             coverage["semantic_error_count"] = job.payload.get(
                 "semantic_error_count", 0
             )
+            ledger = job.payload.get("model_budget") or {
+                "policy": manifest["analysis_budget"],
+                "receipts": {},
+            }
+            coverage["model_budget"] = budget_status(ledger)
+            coverage["deferred_operations"] = list(
+                job.payload.get("model_deferred", {}).values()
+            )
             coverage["evidence_alignment"] = alignment
             coverage["complete"] = (
                 coverage["complete"]
+                and summary["context_analysis"]["status"] == "processed"
                 and not alignment["deferred_pairs"]
                 and not alignment["invalid_pairs"]
+                and not alignment["unchecked_pairs"]
             )
             current.coverage, current.summary = coverage, summary
             current.status = "ready" if coverage["complete"] else "partial"
@@ -503,6 +656,10 @@ class Pipeline:
 
 async def build_summary(db, run):
     manifest = run.manifest
+    from app.intelligence.context_runtime import context_projection
+    from app.intelligence.information_units import project_units
+
+    context_analysis = await context_projection(db, run)
     applications = (
         await db.execute(
             select(SegmentAnalysis, ContentSegment, SemanticCache)
@@ -697,6 +854,9 @@ async def build_summary(db, run):
         }
         for row in entity_rows.values()
     ]
+    from app.intelligence.context_runtime import annotate_subjects
+
+    annotate_subjects(entities, evidence, context_analysis)
     total_chars = sum(len(segment.text) for _, segment, _ in applications)
     analyzed_chars = sum(
         len(segment.text)
@@ -708,6 +868,20 @@ async def build_summary(db, run):
         "segment_states": dict(states),
         "total_characters": total_chars,
         "analyzed_characters": analyzed_chars,
+        "processed_segments": sum(
+            segment_processed(application, cache)
+            for application, _, cache in applications
+        ),
+        "processed_characters": sum(
+            len(segment.text)
+            for application, segment, cache in applications
+            if segment_processed(application, cache)
+        ),
+        "rejected_spans": sum(
+            (cache.result or {}).get("rejected_spans", 0)
+            for _, _, cache in applications
+            if cache
+        ),
         "responses": len(response_map),
         "expected_samples": manifest.get("expected_samples", len(response_map)),
         "pending_samples": sum(
@@ -725,6 +899,10 @@ async def build_summary(db, run):
         "failed_responses": sum(bool(item["error"]) for item in response_map.values()),
         "sources": len(manifest["sources"]),
         "captured_sources": sum(bool(s["snapshot_id"]) for s in manifest["sources"]),
+        "unusable_source_observations": sum(
+            bool(s["snapshot_id"]) and not usable_snapshot(s)
+            for s in manifest["sources"]
+        ),
         "complete": bool(applications)
         and states.get("completed", 0) == len(applications)
         and not any(s["fetch_status"] != "captured" for s in manifest["sources"])
@@ -734,6 +912,9 @@ async def build_summary(db, run):
     coverage["article_completeness"] = (
         "unknown" if coverage["captured_sources"] else "unavailable"
     )
+    coverage["context_analysis"] = {
+        key: value for key, value in context_analysis.items() if key != "observations"
+    }
     coverage["complete"] = (
         coverage["complete"]
         and not manifest["sources"]
@@ -787,16 +968,27 @@ async def build_summary(db, run):
             "source_quote": row.source_quote,
             "relation": row.relation,
             "review_state": row.review_state,
+            "method": row.method,
             "citation_id": row.citation_id,
             "source_segment_id": row.source_segment_id,
+            "answer_segment_id": row.answer_segment_id,
             "snapshot_id": sources_by_id[row.citation_id]["snapshot_id"],
             "source_title": sources_by_id[row.citation_id]["title"],
             "source_url": sources_by_id[row.citation_id]["url"],
             "platform": sources_by_id[row.citation_id]["platform"],
+            "response_id": sources_by_id[row.citation_id]["response_id"],
+            "verification": row.verification,
         }
         for row in evidence_rows
         if row.citation_id in sources_by_id
     ]
+    from app.intelligence.source_observations import (
+        annotate_evidence,
+        project_source_observations,
+    )
+
+    source_observations = await project_source_observations(db, run)
+    annotate_evidence(claim_evidence, source_observations)
     groups = {}
     for response in response_map.values():
         key = stable_hash(
@@ -823,12 +1015,15 @@ async def build_summary(db, run):
         )
         group["sample_count"] += 1
     summary = {
-        "brand_signals": summarize_brand_signals(applications, response_map, evidence),
+        "brand_signals": summarize_brand_signals(applications, response_map, evidence, context_analysis),
+        "information_units": project_units(applications),
+        "context_analysis": context_analysis,
         "entities": entities,
         "platforms": platform_rows,
         "mentions": evidence,
         "claims": claims,
         "claim_evidence": claim_evidence,
+        "source_observations": source_observations,
         "prompt_platforms": list(groups.values()),
         "topics": dict(topics),
         "diagnoses": diagnoses,
@@ -839,8 +1034,19 @@ async def build_summary(db, run):
     summary["brand_evaluation"] = summarize_answer_scores(
         manifest, applications, entities, evidence, summary["brand_signals"]
     )
-    summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
-    from app.intelligence.competitive_actions import competitive_diagnoses
+    from app.intelligence.brand_presence import build_brand_presence
 
-    summary["diagnoses"].extend(competitive_diagnoses(run, summary))
+    summary["brand_presence"] = build_brand_presence(
+        manifest,
+        applications,
+        entities,
+        evidence,
+        summary["brand_signals"],
+        summary["brand_evaluation"],
+    )
+    summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
+    from app.intelligence.opportunities import build_opportunities
+
+    summary["opportunities"] = build_opportunities(run, summary, applications)
+    summary["diagnoses"].extend(summary["opportunities"]["items"])
     return coverage, summary

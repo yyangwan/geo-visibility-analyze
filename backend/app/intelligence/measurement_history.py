@@ -7,12 +7,13 @@ from sqlalchemy import or_, select
 
 from app.config import settings
 from app.intelligence.actions import stamp
-from app.intelligence.measurement import METRIC_VERSION, checked_spec
+from app.intelligence.measurement import checked_spec
 from app.intelligence.models import (
     AuditIntelligenceState,
     IntelligenceRun,
     MeasurementCohort,
     MeasurementResult,
+    SegmentAnalysis,
 )
 from app.intelligence.semantics import stable_hash
 from app.utils.timezone import utc_isoformat
@@ -59,6 +60,9 @@ async def measurement_history(db, project_id, cohort_id=None, since=None):
                 "created_at": utc_isoformat(row.created_at),
                 "expected_samples": len(spec["slots"]),
                 "platforms": sorted({slot["platform"] for slot in spec["slots"]}),
+                "comparison_mode": spec.get("comparison_mode", "inferential_v1"),
+                "metric_version": spec["version"],
+                "brand_targets": spec.get("brand_targets", []),
             }
         )
     result["cohorts_truncated"] = len(cohorts) > 50
@@ -133,7 +137,9 @@ async def saved_measurements(db, project_id, pairs):
             and followup
             and baseline.audit_id != followup.audit_id
             and baseline.input_hash == spec["baseline_input_hash"]
-            and payload.get("version") == METRIC_VERSION
+            and payload.get("version") == spec["version"]
+            and payload.get("comparison_mode", "inferential_v1")
+            == spec.get("comparison_mode", "inferential_v1")
             and payload.get("cohort_id") == cohort.id
             and payload.get("baseline_run_id") == baseline.id
             and payload.get("followup_run_id") == followup.id
@@ -143,7 +149,7 @@ async def saved_measurements(db, project_id, pairs):
             and row.comparison_signature
             == stable_hash(
                 [
-                    METRIC_VERSION,
+                    spec["version"],
                     cohort.specification_hash,
                     [baseline.id, baseline.input_hash, baseline.signature],
                     [followup.id, followup.input_hash, followup.signature],
@@ -153,10 +159,36 @@ async def saved_measurements(db, project_id, pairs):
         if not valid:
             raise HTTPException(409, "Stored measurement does not match frozen inputs")
         current = base_fresh and follow_fresh
+        freshness_basis = "current_snapshots"
+        if (
+            not current
+            and spec.get("comparison_mode") == "descriptive_v1"
+            and follow_fresh
+        ):
+            # A newly confirmed first appearance changes project identity context.
+            # That alone cannot erase a previously verified absence under unchanged names.
+            current = await frozen_baseline_compatible(db, baseline, spec)
+            freshness_basis = "frozen_baseline_current_followup"
         if not current:
             for platform in payload.get("platforms", []):
                 for metric in platform["metrics"]:
                     metric.update(difference=None, interval95=None)
+                for observation in platform.get("observations", []):
+                    observation.update(
+                        comparison_state="incompatible",
+                        reason_codes=["snapshot_not_current"],
+                    )
+                    if "publication_window" in observation:
+                        observation["publication_window"]["status"] = (
+                            "snapshot_not_current"
+                        )
+                    for target in observation["targets"]:
+                        for metric in target["metrics"]:
+                            metric.update(
+                                observed_delta=None,
+                                comparison_state="incompatible",
+                                reason_codes=["snapshot_not_current"],
+                            )
         items.append(
             {
                 **payload,
@@ -164,12 +196,66 @@ async def saved_measurements(db, project_id, pairs):
                 "created_at": utc_isoformat(row.created_at),
                 "comparison_signature": row.comparison_signature,
                 "snapshot_current": current,
+                "baseline_snapshot_current": base_fresh,
+                "followup_snapshot_current": follow_fresh,
+                "freshness_basis": freshness_basis,
                 "cohort_title": cohort.title,
                 "baseline_audit_id": str(baseline.audit_id),
                 "followup_audit_id": str(followup.audit_id),
             }
         )
     return items
+
+
+async def frozen_baseline_compatible(db, baseline, spec):
+    from app.intelligence.action_dependencies import (
+        current_questions,
+        question_projection,
+        scoped_identity,
+    )
+    from app.intelligence.descriptive_measurement import target_projection
+
+    newest = await db.scalar(
+        select(IntelligenceRun.id)
+        .where(
+            IntelligenceRun.project_id == baseline.project_id,
+            IntelligenceRun.audit_id == baseline.audit_id,
+        )
+        .order_by(IntelligenceRun.revision.desc())
+        .limit(1)
+    )
+    if newest != baseline.id or baseline.status not in ("ready", "partial"):
+        return False
+    if (
+        stable_hash(
+            target_projection(
+                baseline.summary.get("brand_presence", {}), spec["brand_target_ids"]
+            )
+        )
+        != spec["baseline_brand_projection_hash"]
+    ):
+        return False
+    keys = [(row["platform"], row["prompt_hash"]) for row in spec["slots"]]
+    if await current_questions(db, baseline, keys) != question_projection(
+        baseline.manifest.get("evaluation_cohort"), keys
+    ):
+        return False
+    segments = list(
+        await db.scalars(
+            select(SegmentAnalysis.segment_id).where(
+                SegmentAnalysis.project_id == baseline.project_id,
+                SegmentAnalysis.run_id == baseline.id,
+            )
+        )
+    )
+    _scope, frozen, live = await scoped_identity(
+        db,
+        baseline,
+        [row["entity_id"] for row in spec["brand_targets"] if row.get("entity_id")],
+        segments,
+        spec["brand_target_ids"],
+    )
+    return frozen["bindings"] == live["bindings"]
 
 
 async def report_measurements(db, run):

@@ -13,6 +13,7 @@ from app.intelligence.models import (
     SegmentAnalysis,
     SourceSnapshot,
 )
+from app.intelligence.source_quality import usable_snapshot
 
 METRICS = {
     "cited_card_presence": ("answer_reference", "citation"),
@@ -86,7 +87,8 @@ async def source_snapshot(db, run):
     archived = {
         row.id: bool(texts.get(("snapshot", row.id)))
         and row.integrity_status == "verified"
-        and digest(texts[("snapshot", row.id)].encode("utf-8")) == row.text_sha256
+        and row.quality.get("evidence_usable") is not False
+        and digest(texts[("snapshot", row.id)].encode("utf-8")) == row.body_hash
         for row in snapshots
     }
     mentions = (
@@ -202,6 +204,7 @@ async def source_snapshot(db, run):
                         valid
                         and source.get("url_resolution") == "exact"
                         and source.get("fetch_status") == "captured"
+                        and usable_snapshot(source)
                         and snapshot is not None
                         and snapshot.document_id == source.get("document_id")
                         and archived.get(owner_id, False)

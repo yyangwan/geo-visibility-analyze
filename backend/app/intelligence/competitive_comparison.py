@@ -66,6 +66,10 @@ def scoped_cohort(cohort, axis, value):
             and cell["category"] == value
             or axis == "platform_category"
             and (cell["platform"], cell["category"]) == value
+            or axis == "scenario"
+            and cell.get("primary_scenario") == value
+            or axis == "platform_scenario"
+            and (cell["platform"], cell.get("primary_scenario")) == value
         )
     ]
     total = sum((Fraction(**cell["weight"]) for cell in cells), Fraction())
@@ -101,6 +105,8 @@ def competitive_breakdown(cohort, rows, entities):
         entity["id"]: entity
         for entity in entities
         if entity["kind"] in ("brand", "organization", "product")
+        and not (entity.get("role", "unregistered") == "unregistered"
+                 and entity.get("comparison_context_status") == "not_solution")
     }
     index = defaultdict(list)
     for row in rows:

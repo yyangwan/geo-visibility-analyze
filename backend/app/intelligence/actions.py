@@ -2,10 +2,11 @@
 
 import hashlib
 import hmac
+from copy import deepcopy
 from typing import Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import select
 
 from app.config import settings
@@ -20,7 +21,6 @@ from app.intelligence.models import (
     PlatformDiagnosis,
 )
 from app.intelligence.project_context import context_snapshot
-from app.intelligence.refresh import state_for_audit
 from app.intelligence.semantics import analysis_signature, stable_hash
 
 
@@ -34,7 +34,7 @@ class PlanRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    expected_revision: StrictInt = Field(alias="expectedRevision", ge=1)
     reason: str = Field(min_length=5, max_length=2000)
     idempotency_key: str = Field(
         alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
@@ -44,7 +44,7 @@ class ApprovalRequest(BaseModel):
 
 async def persist_diagnoses(db, run, summary):
     for diagnosis in summary.get("diagnoses", []):
-        if not diagnosis.get("id") or not diagnosis.get("action"):
+        if not diagnosis.get("id") or not diagnosis.get("action") and not diagnosis.get("task_key"):
             continue
         record = await db.scalar(
             select(PlatformDiagnosis).where(
@@ -62,6 +62,11 @@ async def persist_diagnoses(db, run, summary):
             )
             db.add(record)
             await db.flush()
+        elif diagnosis.get("task_key"):
+            frozen = {key: value for key, value in record.payload.items() if key != "record_id"}
+            candidate = {key: value for key, value in diagnosis.items() if key != "record_id"}
+            if stable_hash(frozen) != stable_hash(candidate):
+                raise HTTPException(409, "Published opportunity is immutable; create a new Run revision")
         diagnosis["record_id"] = record.id
 
 
@@ -115,7 +120,15 @@ async def stamp(db, run, state):
 
 
 async def create_plan(db, run, data, actor):
-    await state_for_audit(db, run.project_id, run.audit_id)
+    from app.intelligence.action_revisions import (
+        append_initial_revision,
+        lock_action_context,
+        validate_own_facts,
+    )
+
+    if not actor:
+        raise HTTPException(422, "Named task author required")
+    await lock_action_context(db, run)
     diagnosis = await db.scalar(
         select(PlatformDiagnosis).where(
             PlatformDiagnosis.project_id == run.project_id,
@@ -124,7 +137,23 @@ async def create_plan(db, run, data, actor):
         )
     )
     if diagnosis is None or not diagnosis.payload.get("action"):
+        if diagnosis and diagnosis.payload.get("task_key"):
+            raise HTTPException(409, "Opportunity is not actionable; inspect scope and task contract")
         raise HTTPException(404, "Diagnosis not in this run")
+    if diagnosis.payload.get("task_key"):
+        from pydantic import ValidationError
+
+        from app.intelligence.value_contracts import TaskPackV2
+
+        try:
+            pack = TaskPackV2.model_validate(diagnosis.payload["task_pack"])
+            valid = (pack.project_id == run.project_id and pack.task_key() == diagnosis.payload["task_key"]
+                     and pack.revision_signature() == diagnosis.payload["task_signature"]
+                     and all(ref.run_id == run.id for ref in pack.diagnostic_evidence))
+        except (ValidationError, KeyError):
+            valid = False
+        if not valid:
+            raise HTTPException(409, "Frozen task package integrity changed")
     previous = await db.scalar(
         select(ActionPlan)
         .where(
@@ -191,18 +220,22 @@ async def create_plan(db, run, data, actor):
         actor_id=actor,
         idempotency_key=data.idempotency_key,
     )
+    await validate_own_facts(db, run, action.target, require_frozen=True)
     db.add(action)
     await db.flush()
+    await append_initial_revision(db, action, run, actor)
     return action
 
 
-def signature(action, approval):
+def signature(revision, approval):
     content = stable_hash(
         [
-            action.id,
-            action.revision,
-            action.title,
-            action.target,
+            revision.action_id,
+            revision.id,
+            revision.revision,
+            revision.signature,
+            revision.payload,
+            revision.dependencies,
             approval.input_stamp,
             approval.actor_id,
             approval.role,
@@ -216,11 +249,21 @@ def signature(action, approval):
 
 
 async def approve_plan(db, action, run, data, actor, role):
-    state = await state_for_audit(db, run.project_id, run.audit_id)
+    from app.intelligence.action_dependencies import check_dependencies
+    from app.intelligence.action_revisions import (
+        current_revision,
+        lock_action_context,
+        revision_integrity,
+    )
+
+    if not actor or role not in ("owner", "admin", "editor", "member"):
+        raise HTTPException(403, "Named authorized reviewer required")
+    await lock_action_context(db, run)
     action = await db.scalar(
         select(ActionPlan)
         .where(ActionPlan.project_id == run.project_id, ActionPlan.id == action.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     request_hash = stable_hash([action.id, data.model_dump(), actor, role])
     previous = await db.scalar(
@@ -237,9 +280,13 @@ async def approve_plan(db, action, run, data, actor, role):
         return previous
     if action.revision != data.expected_revision or action.status != "proposed":
         raise HTTPException(409, "Action revision changed or already approved")
-    value, fresh = await stamp(db, run, state)
-    if not fresh:
-        raise HTTPException(409, "Evidence changed; create a plan from the latest run")
+    revision, run = await current_revision(db, action, lock=True)
+    if not revision_integrity(action, revision):
+        raise HTTPException(409, "Action revision integrity changed")
+    changes = await check_dependencies(db, run, action.target, revision.dependencies, lock=True)
+    if changes:
+        raise HTTPException(409, {"code": "action_dependencies_changed", "changes": changes})
+    value = stable_hash(revision.dependencies)
     if len(data.reason.strip()) < 5:
         raise HTTPException(422, "Approval requires review rationale")
     approval = ActionApproval(
@@ -254,7 +301,7 @@ async def approve_plan(db, action, run, data, actor, role):
         idempotency_key=data.idempotency_key,
         request_hash=request_hash,
     )
-    approval.signature = signature(action, approval)
+    approval.signature = signature(revision, approval)
     db.add(approval)
     action.status = "approved"
     await db.flush()
@@ -262,9 +309,14 @@ async def approve_plan(db, action, run, data, actor, role):
 
 
 async def plan_view(db, action, run, *, state=None):
-    if state is None:
-        state = await state_for_audit(db, run.project_id, run.audit_id)
-    value, fresh = await stamp(db, run, state)
+    from app.intelligence.action_dependencies import check_dependencies
+    from app.intelligence.action_revisions import current_revision, revision_integrity
+
+    revision, run = await current_revision(db, action)
+    changes = await check_dependencies(db, run, revision.payload["target"], revision.dependencies)
+    integrity = revision_integrity(action, revision)
+    if not integrity:
+        changes.append({"dependency": "revision_integrity", "reason": "Immutable action payload changed"})
     approval = await db.scalar(
         select(ActionApproval).where(
             ActionApproval.project_id == run.project_id,
@@ -274,17 +326,24 @@ async def plan_view(db, action, run, *, state=None):
     )
     valid = bool(
         approval
-        and approval.input_stamp == value
-        and hmac.compare_digest(approval.signature, signature(action, approval))
+        and approval.input_stamp == stable_hash(revision.dependencies)
+        and hmac.compare_digest(approval.signature, signature(revision, approval))
+        and integrity
     )
     return {
         "id": action.id,
-        "run_id": action.run_id,
+        "run_id": revision.run_id,
+        "origin_run_id": action.run_id,
+        "revision_id": revision.id,
+        "revision_signature": revision.signature,
+        "task_key": revision.task_key,
+        "dependency_signature": stable_hash(revision.dependencies),
+        "dependency_changes": changes,
         "revision": action.revision,
-        "title": action.title,
-        "target": action.target,
-        "status": action.status if fresh and (not approval or valid) else "stale",
+        "title": revision.payload["title"],
+        "target": deepcopy(revision.payload["target"]),
+        "status": action.status if not changes and (not approval or valid) else "stale",
         "approval_scope": "investigation_plan",
-        "approval_valid": valid and fresh,
+        "approval_valid": valid and not changes and action.status == "approved",
         "publication_allowed": False,
     }

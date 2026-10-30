@@ -10,7 +10,6 @@ from app.api.auth import get_current_user
 from app.config import settings
 from app.intelligence.blob import digest
 from app.intelligence.measurement import (
-    AssetRequest,
     CohortRequest,
     CompareRequest,
     RetestRequest,
@@ -18,7 +17,6 @@ from app.intelligence.measurement import (
     compare_cohort,
     compare_snapshots,
     create_cohort,
-    record_asset,
     run_snapshot,
     start_retest,
 )
@@ -29,6 +27,12 @@ from app.intelligence.models import (
     MeasurementCohort,
     PromptVersion,
     SegmentAnalysis,
+)
+from app.intelligence.publication import (
+    PublicationRequest as AssetRequest,
+)
+from app.intelligence.publication import (
+    record_asset,
 )
 from app.intelligence.semantics import stable_hash
 from app.main import app
@@ -192,12 +196,19 @@ def test_missing_and_duplicate_samples_are_traced_and_extra_prompts_never_expand
     assert not result["included"]
 
 
-async def fixture_cohort(db):
-    audit = await fixture_audit(db)
+async def fixture_cohort(db, project="p1"):
+    from app.models.models import PlatformResponseRecord
+
+    audit = await fixture_audit(db, project=project)
+    prompt_id = await db.scalar(
+        select(PlatformResponseRecord.prompt_id).where(
+            PlatformResponseRecord.audit_id == audit.id
+        )
+    )
     text = "冻结原提示词"
     version = PromptVersion(
-        project_id="p1",
-        prompt_id=1,
+        project_id=project,
+        prompt_id=prompt_id,
         text=text,
         text_hash=digest(text.encode()),
         category="custom",
@@ -205,7 +216,7 @@ async def fixture_cohort(db):
     db.add(version)
     await db.flush()
     sample = AuditSample(
-        project_id="p1",
+        project_id=project,
         audit_id=audit.id,
         prompt_version_id=version.id,
         platform="qwen",
@@ -218,7 +229,7 @@ async def fixture_cohort(db):
     db.add(sample)
     await db.flush()
     run = IntelligenceRun(
-        project_id="p1",
+        project_id=project,
         audit_id=audit.id,
         revision=1,
         signature="s" * 64,
@@ -239,7 +250,7 @@ async def fixture_cohort(db):
         entityIds=[ENTITY],
         idempotencyKey="cohort-key-123",
     )
-    cohort = await create_cohort(db, "p1", request, "user")
+    cohort = await create_cohort(db, project, request, "user")
     await db.commit()
     return cohort, run, version, request
 
@@ -398,22 +409,43 @@ async def test_measurement_api_blocks_viewer_writes_and_cross_project_reads(
 async def test_publication_asset_is_human_reported_and_has_no_publish_side_effect(
     db_session,
 ):
-    from tests.test_intelligence_actions import fixture_plan
+    from tests.test_intelligence_execution import arranged, change, command
 
-    _, action, _ = await fixture_plan(db_session)
+    _, action, _ = await arranged(db_session)
+    await change(db_session, action, command("start", 1))
+    delivery = await change(
+        db_session,
+        action,
+        command(
+            "deliver",
+            2,
+            artifacts=[
+                {
+                    "kind": "external_url",
+                    "title": "已交付实施说明",
+                    "url": "https://example.com/content",
+                }
+            ],
+        ),
+    )
     request = AssetRequest(
         actionId=action.id,
         url="https://example.com/content",
         channel="website",
-        contentHash="a" * 64,
+        expectedRevision=1,
+        deliveryEventId=delivery["snapshot"]["delivery"]["event_id"],
+        artifactIndex=0,
+        versionConfirmed=True,
         publishedAt=datetime(2026, 1, 1, tzinfo=UTC),
         reason="负责人核对已发布正文",
         idempotencyKey="asset-key-123",
     )
-    asset = await record_asset(db_session, "p1", request, "user")
-    assert (await record_asset(db_session, "p1", request, "user")).id == asset.id
+    asset = await record_asset(db_session, "p1", request, "owner", "owner")
+    assert (
+        await record_asset(db_session, "p1", request, "owner", "owner")
+    ).id == asset.id
     with pytest.raises(HTTPException):
-        await record_asset(db_session, "p2", request, "user")
+        await record_asset(db_session, "p2", request, "owner", "owner")
     with pytest.raises(ValidationError):
         AssetRequest.model_validate(
             {**request.model_dump(by_alias=True), "url": "javascript:alert(1)"}

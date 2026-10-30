@@ -51,7 +51,7 @@ def test_weights_freeze_platform_category_and_prompt_not_success_count():
 
 def test_duplicate_rounds_do_not_increase_weight_and_named_prompts_are_excluded():
     cohort = freeze_cohort(
-        [cell("a"), cell("b", index=2), cell("c", prompt="云衡如何")],
+        [cell("a"), cell("b", index=2), cell("c", prompt="云衡品牌如何")],
         [{"name": "云衡"}],
     )
     assert len(cohort["cells"]) == 2
@@ -64,7 +64,7 @@ def test_duplicate_rounds_do_not_increase_weight_and_named_prompts_are_excluded(
     )  # Neutrality still requires review.
     assert (
         freeze_cohort(
-            [cell("b", index=2), cell("a"), cell("c", prompt="云衡如何")],
+            [cell("b", index=2), cell("a"), cell("c", prompt="云衡品牌如何")],
             [{"name": "云衡"}],
         )["hash"]
         == cohort["hash"]
@@ -139,12 +139,15 @@ def test_whole_answer_conflicts_and_missing_tail_are_unknown():
     assert score["dimensions"]["reasons"] == 75
     assert score["score"] is None  # No validated full recommendation list.
     segment.end_offset = 1
+    incomplete = summarize_answer_scores(manifest, rows, entities, mentions, signals)[
+        "answer_scores"
+    ][0]
+    assert incomplete["status"] == "partial"
+    assert incomplete["score"] is None
     assert (
-        summarize_answer_scores(manifest, rows, entities, mentions, signals)[
-            "answer_scores"
-        ][0]["status"]
-        == "pending"
-    )
+        incomplete["dimensions"]["presence"] == 100
+    )  # Validated positive evidence survives a missing tail.
+    assert incomplete["dimensions"]["reasons"] is None
 
 
 @pytest.mark.asyncio

@@ -171,6 +171,8 @@ class JobQueue:
                 ):
                     run.status = "failed"
                     run.finished_at = now
+                    if job.kind == "analyze_run":
+                        run.coverage = {**(run.coverage or {}), "analysis_error_code": code[:50]}
 
     async def reap(self) -> int:
         async with self.sessions() as db, db.begin():

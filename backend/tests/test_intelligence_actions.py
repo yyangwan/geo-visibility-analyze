@@ -70,7 +70,7 @@ async def test_plan_approval_signature_and_idempotency(db_session):
 
 
 @pytest.mark.asyncio
-async def test_pending_evidence_invalidates_approval_without_rewriting_it(db_session):
+async def test_unrelated_refresh_does_not_invalidate_or_rewrite_approval(db_session):
     run, plan, _ = await fixture_plan(db_session)
     request = ApprovalRequest(
         expectedRevision=1,
@@ -85,7 +85,7 @@ async def test_pending_evidence_invalidates_approval_without_rewriting_it(db_ses
     await request_refresh(
         db_session, "p1", run.audit_id, "source_changed", "new-source"
     )
-    assert (await plan_view(db_session, plan, run))["status"] == "stale"
+    assert (await plan_view(db_session, plan, run))["approval_valid"]
     assert approval.signature == original_signature
 
 
@@ -107,7 +107,7 @@ async def test_model_configuration_change_invalidates_plan(db_session, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_new_revision_and_wrong_diagnosis_reject_approval(db_session):
+async def test_new_run_does_not_revoke_existing_plan_and_wrong_diagnosis_rejects(db_session):
     run, plan, request = await fixture_plan(db_session)
     with pytest.raises(HTTPException) as wrong:
         await create_plan(
@@ -129,8 +129,7 @@ async def test_new_revision_and_wrong_diagnosis_reject_approval(db_session):
         )
     )
     await db_session.flush()
-    with pytest.raises(HTTPException) as stale:
-        await approve_plan(
+    await approve_plan(
             db_session,
             plan,
             run,
@@ -142,8 +141,8 @@ async def test_new_revision_and_wrong_diagnosis_reject_approval(db_session):
             ),
             "reviewer",
             "owner",
-        )
-    assert stale.value.status_code == 409
+    )
+    assert (await plan_view(db_session, plan, run))["approval_valid"]
 
 
 @pytest.mark.asyncio

@@ -36,14 +36,11 @@ class AliasRequest(StrictFact):
         return self
 
 
-async def alias_snapshot(db, project_id):
-    rows = (
-        await db.scalars(
-            select(EntityAliasEvent)
+async def alias_snapshot(db, project_id, *, lock=False):
+    query = (select(EntityAliasEvent)
             .where(EntityAliasEvent.project_id == project_id)
-            .order_by(EntityAliasEvent.source_entity_id, EntityAliasEvent.version)
-        )
-    ).all()
+            .order_by(EntityAliasEvent.source_entity_id, EntityAliasEvent.version))
+    rows = (await db.scalars(query.with_for_update().execution_options(populate_existing=True) if lock else query)).all()
     return {
         row.source_entity_id: {
             "event_id": row.id,

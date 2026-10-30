@@ -1,3 +1,5 @@
+import gzip
+
 import pytest
 
 from app.intelligence.blob import digest
@@ -32,7 +34,7 @@ async def corpus(db, kind="answer_reference"):
         body_hash=digest(body.encode()),
         representation_hash="c" * 64,
         text_key="projects/p1/text.gz",
-        text_sha256=digest(body.encode()),
+        text_sha256=digest(gzip.compress(body.encode(), mtime=0)),
         extractor_version="test",
         completeness="unknown",
         integrity_status="verified",
@@ -139,6 +141,17 @@ async def test_search_candidates_do_not_become_actual_citations(db_session):
 
 
 @pytest.mark.asyncio
+async def test_unusable_snapshot_never_enters_source_presence_denominator(db_session):
+    run, target, snapshot = await corpus(db_session)
+    snapshot.quality = {"evidence_usable": False, "state": "access_challenge"}
+    await db_session.flush()
+    metrics = await source_snapshot(db_session, run)
+    assert not metrics["cited_archive_presence"]["completed"]
+    assert not metrics["cited_archive_presence"]["hits"].get(target.id)
+    assert metrics["cited_card_presence"]["completed"]
+
+
+@pytest.mark.asyncio
 async def test_partial_panels_and_archive_hash_mismatches_are_unknown_not_zero(
     db_session,
 ):
@@ -176,7 +189,7 @@ async def test_partial_panels_and_archive_hash_mismatches_are_unknown_not_zero(
             }
         ],
     }
-    snapshot.text_sha256 = "f" * 64
+    snapshot.body_hash = "f" * 64
     await db_session.flush()
     metrics = await source_snapshot(db_session, run)
     assert not metrics["cited_archive_presence"]["completed"]

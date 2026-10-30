@@ -7,17 +7,16 @@ import asyncio
 import random
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
+from typing import Literal
 
 from fastapi import HTTPException
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from sqlalchemy import select
 
 from app.config import settings
 from app.intelligence.blob import digest
 from app.intelligence.capture_contract import CaptureConditions, StrictFact
 from app.intelligence.models import (
-    ActionPlan,
     AuditSample,
     CohortRetest,
     ContentSegment,
@@ -25,14 +24,12 @@ from app.intelligence.models import (
     MeasurementCohort,
     MeasurementResult,
     PromptVersion,
-    PublishedAsset,
     SamplingAudit,
     SegmentAnalysis,
 )
 from app.intelligence.sampling import dispatch_attempt
 from app.intelligence.semantics import stable_hash
 from app.models.models import Audit, AuditStage, QueryStatus
-from app.utils.timezone import utc_isoformat, utcnow
 
 METRIC_VERSION = "paired-source-presence-2"
 BOOTSTRAP_DRAWS = 2000
@@ -43,12 +40,33 @@ MIN_ROUNDS = 3
 class CohortRequest(StrictFact):
     baseline_run_id: str = Field(alias="baselineRunId", pattern=r"^[a-f0-9]{32}$")
     title: str = Field(min_length=5, max_length=200)
-    entity_ids: list[str] = Field(alias="entityIds", min_length=1, max_length=20)
+    comparison_mode: Literal["inferential_v1", "descriptive_v1"] = Field(
+        default="inferential_v1", alias="comparisonMode"
+    )
+    entity_ids: list[str] = Field(
+        default_factory=list, alias="entityIds", max_length=20
+    )
+    brand_target_ids: list[str] = Field(
+        default_factory=list, alias="brandTargetIds", max_length=20
+    )
+    platforms: list[str] = Field(default_factory=list, max_length=20)
+    prompt_hashes: list[str] = Field(
+        default_factory=list, alias="promptHashes", max_length=1000
+    )
+    action_id: str | None = Field(
+        default=None, alias="actionId", pattern=r"^[a-f0-9]{32}$"
+    )
+    expected_action_revision: int | None = Field(
+        default=None, alias="expectedActionRevision", ge=1
+    )
+    publication_asset_ids: list[str] = Field(
+        default_factory=list, alias="publicationAssetIds", max_length=20
+    )
     idempotency_key: str = Field(
         alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
     )
 
-    @field_validator("entity_ids")
+    @field_validator("entity_ids", "publication_asset_ids")
     @classmethod
     def unique_ids(cls, values):
         import re
@@ -59,6 +77,47 @@ class CohortRequest(StrictFact):
             raise ValueError("Unique entity IDs required")
         return values
 
+    @model_validator(mode="after")
+    def comparison_scope(self):
+        import re
+
+        if self.comparison_mode == "inferential_v1":
+            if (
+                not self.entity_ids
+                or self.brand_target_ids
+                or self.platforms
+                or self.prompt_hashes
+                or self.action_id
+                or self.expected_action_revision
+                or self.publication_asset_ids
+            ):
+                raise ValueError(
+                    "Inferential mode requires entity IDs and its full frozen sampling scope"
+                )
+        elif not self.brand_target_ids or self.entity_ids:
+            raise ValueError(
+                "Descriptive mode requires stable brand targets, not observed entity IDs"
+            )
+        if (
+            bool(self.action_id) != bool(self.expected_action_revision)
+            or self.publication_asset_ids
+            and not self.action_id
+        ):
+            raise ValueError("Publication scope requires an exact action revision")
+        for values in (self.brand_target_ids, self.platforms, self.prompt_hashes):
+            if len(values) != len(set(values)):
+                raise ValueError("Comparison scope must not contain duplicates")
+        if any(
+            not re.fullmatch(r"(?:registry|entity):[a-zA-Z0-9_-]{1,180}", value)
+            for value in self.brand_target_ids
+        ):
+            raise ValueError("Stable brand target IDs required")
+        if any(
+            not re.fullmatch(r"[a-f0-9]{64}", value) for value in self.prompt_hashes
+        ):
+            raise ValueError("Frozen prompt hashes required")
+        return self
+
 
 class RetestRequest(StrictFact):
     idempotency_key: str = Field(
@@ -68,44 +127,6 @@ class RetestRequest(StrictFact):
 
 class CompareRequest(StrictFact):
     followup_run_id: str = Field(alias="followupRunId", pattern=r"^[a-f0-9]{32}$")
-
-
-class AssetRequest(StrictFact):
-    action_id: str = Field(alias="actionId", pattern=r"^[a-f0-9]{32}$")
-    url: str = Field(min_length=1, max_length=4096)
-    channel: str = Field(
-        pattern=r"^(wechat|weibo|xiaohongshu|douyin|website|zhihu|toutiao)$"
-    )
-    content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
-    published_at: datetime = Field(alias="publishedAt")
-    reason: str = Field(min_length=5, max_length=2000)
-    idempotency_key: str = Field(
-        alias="idempotencyKey", pattern=r"^[a-zA-Z0-9_-]{8,100}$"
-    )
-
-    @field_validator("url")
-    @classmethod
-    def public_link(cls, value):
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in ("http", "https")
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-        ):
-            raise ValueError("An HTTP publication URL without credentials is required")
-        return value
-
-    @field_validator("published_at")
-    @classmethod
-    def known_time(cls, value):
-        if (
-            value.tzinfo is None
-            or value.utcoffset() is None
-            or value.astimezone(UTC).replace(tzinfo=None) > utcnow()
-        ):
-            raise ValueError("An observed publication time with timezone is required")
-        return value
 
 
 async def scoped_run(db, project_id, run_id):
@@ -126,6 +147,21 @@ def identity_context(run, ids):
 
 
 async def create_cohort(db, project_id, data, actor_id):
+    action = None
+    if data.action_id:
+        from app.intelligence.publication import lock_publication_action
+
+        baseline_audit = await db.scalar(
+            select(IntelligenceRun.audit_id).where(
+                IntelligenceRun.project_id == project_id,
+                IntelligenceRun.id == data.baseline_run_id,
+            )
+        )
+        if baseline_audit is None:
+            raise HTTPException(404, "Baseline run not found")
+        action = await lock_publication_action(
+            db, project_id, data.action_id, other_audit_ids=(baseline_audit,)
+        )
     # Lock the existing baseline row to serialize cohort idempotency and input freezing.
     run = await db.scalar(
         select(IntelligenceRun)
@@ -134,6 +170,7 @@ async def create_cohort(db, project_id, data, actor_id):
             IntelligenceRun.id == data.baseline_run_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if run is None:
         raise HTTPException(404, "Baseline run not found")
@@ -153,7 +190,9 @@ async def create_cohort(db, project_id, data, actor_id):
     if run.status not in ("ready", "partial"):
         raise HTTPException(409, "Wait for published baseline")
     entities = {item["id"]: item for item in run.summary.get("entities", [])}
-    if any(eid not in entities for eid in data.entity_ids):
+    if data.comparison_mode == "inferential_v1" and any(
+        eid not in entities for eid in data.entity_ids
+    ):
         raise HTTPException(422, "Select entities observed in the baseline")
     samples = (
         await db.scalars(
@@ -190,6 +229,7 @@ async def create_cohort(db, project_id, data, actor_id):
                 "sample_id": sample.id,
                 "prompt_version_id": version.id,
                 "prompt_hash": version.text_hash,
+                "prompt": version.text,
                 "platform": sample.platform,
                 "surface": sample.surface,
                 "sample_index": sample.sample_index,
@@ -198,6 +238,7 @@ async def create_cohort(db, project_id, data, actor_id):
         )
     specification = {
         "version": METRIC_VERSION,
+        "comparison_mode": data.comparison_mode,
         "baseline_run_id": run.id,
         "baseline_input_hash": run.input_hash,
         "analysis_signature": run.signature,
@@ -219,6 +260,21 @@ async def create_cohort(db, project_id, data, actor_id):
         "metric": "answer_presence",
         "causal_claim_allowed": False,
     }
+    if data.comparison_mode == "descriptive_v1":
+        from app.intelligence.descriptive_measurement import freeze_descriptive
+        from app.intelligence.publication import freeze_action_link
+
+        link = await freeze_action_link(db, action, data) if action else None
+        if link:
+            allowed = {
+                (row["platform"], row["prompt_hash"]) for row in link["ai_targets"]
+            }
+            rows = [
+                row for row in rows if (row["platform"], row["prompt_hash"]) in allowed
+            ]
+        specification = freeze_descriptive(run, data, rows)
+        if link:
+            specification["action_link"] = link
     cohort = MeasurementCohort(
         project_id=project_id,
         baseline_run_id=run.id,
@@ -235,9 +291,19 @@ async def create_cohort(db, project_id, data, actor_id):
 
 
 def checked_spec(cohort):
+    from app.intelligence.descriptive_measurement import VERSION as DESCRIPTIVE_VERSION
+    from app.intelligence.descriptive_measurement import supported_spec
+
+    mode = cohort.specification.get("comparison_mode", "inferential_v1")
+    expected_version = (
+        DESCRIPTIVE_VERSION if mode == "descriptive_v1" else METRIC_VERSION
+    )
     if (
         stable_hash(cohort.specification) != cohort.specification_hash
-        or cohort.specification.get("version") != METRIC_VERSION
+        or mode not in ("descriptive_v1", "inferential_v1")
+        or cohort.specification.get("version") != expected_version
+        or mode == "descriptive_v1"
+        and not supported_spec(cohort.specification)
     ):
         raise HTTPException(
             409, "Frozen cohort specification changed or is unsupported"
@@ -246,25 +312,31 @@ def checked_spec(cohort):
 
 
 async def start_retest(db, cohort, data, actor_id):
-    await db.scalar(
+    cohort = await db.scalar(
         select(MeasurementCohort)
         .where(
             MeasurementCohort.project_id == cohort.project_id,
             MeasurementCohort.id == cohort.id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     previous = await db.scalar(
-        select(CohortRetest).where(
+        select(CohortRetest)
+        .where(
             CohortRetest.project_id == cohort.project_id,
             CohortRetest.cohort_id == cohort.id,
             CohortRetest.idempotency_key == data.idempotency_key,
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if previous:
         return previous
     spec = checked_spec(cohort)
     baseline = await scoped_run(db, cohort.project_id, cohort.baseline_run_id)
+    if baseline.input_hash != spec["baseline_input_hash"]:
+        raise HTTPException(409, "Frozen baseline input changed")
     audit = Audit(
         project_id=cohort.project_id,
         status=QueryStatus.RUNNING,
@@ -367,6 +439,9 @@ async def run_snapshot(db, run):
                 ambiguous.add(mention["owner_id"])
             hits[mention["entity_id"]].add(mention["owner_id"])
     return {
+        "brand_presence": run.summary.get("brand_presence") or {},
+        "evaluation_cohort": run.manifest.get("evaluation_cohort") or {},
+        "entity_aliases": run.manifest.get("entity_aliases", {}),
         "source_metrics": await source_snapshot(db, run),
         "responses": run.manifest.get("responses", []),
         "completed": completed,
@@ -470,6 +545,10 @@ def source_trace_examples(observed, snapshot, platform, entity_id, expected):
 
 
 def compare_snapshots(spec, baseline, followup, *, include_sources=True):
+    if spec.get("comparison_mode") == "descriptive_v1":
+        from app.intelligence.descriptive_measurement import compare_descriptive
+
+        return compare_descriptive(spec, baseline, followup)
     base_rows, next_rows = defaultdict(list), defaultdict(list)
     for row in baseline["responses"]:
         base_rows[slot_key(row)].append(row)
@@ -697,6 +776,7 @@ def compare_snapshots(spec, baseline, followup, *, include_sources=True):
                     )
     return {
         "version": METRIC_VERSION,
+        "comparison_mode": "inferential_v1",
         "analysis_signature_equal": signature_equal,
         "identity_context_equal": identity_equal,
         "platforms": platforms,
@@ -725,24 +805,28 @@ def compare_snapshots(spec, baseline, followup, *, include_sources=True):
 
 
 async def compare_cohort(db, cohort, data, actor_id):
-    await db.scalar(
+    cohort = await db.scalar(
         select(MeasurementCohort)
         .where(
             MeasurementCohort.project_id == cohort.project_id,
             MeasurementCohort.id == cohort.id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    spec = checked_spec(cohort)
     existing = await db.scalar(
-        select(MeasurementResult).where(
+        select(MeasurementResult)
+        .where(
             MeasurementResult.project_id == cohort.project_id,
             MeasurementResult.cohort_id == cohort.id,
             MeasurementResult.followup_run_id == data.followup_run_id,
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if existing:
         return existing
-    spec = checked_spec(cohort)
     baseline = await scoped_run(db, cohort.project_id, cohort.baseline_run_id)
     followup = await scoped_run(db, cohort.project_id, data.followup_run_id)
     if baseline.audit_id == followup.audit_id:
@@ -758,6 +842,9 @@ async def compare_cohort(db, cohort, data, actor_id):
         await run_snapshot(db, baseline),
         await run_snapshot(db, followup),
     )
+    from app.intelligence.publication import add_publication_windows
+
+    result = add_publication_windows(result, spec)
     result.update(
         {
             "baseline_run_id": baseline.id,
@@ -778,7 +865,7 @@ async def compare_cohort(db, cohort, data, actor_id):
         followup_run_id=followup.id,
         comparison_signature=stable_hash(
             [
-                METRIC_VERSION,
+                spec["version"],
                 cohort.specification_hash,
                 [baseline.id, baseline.input_hash, baseline.signature],
                 [followup.id, followup.input_hash, followup.signature],
@@ -790,53 +877,3 @@ async def compare_cohort(db, cohort, data, actor_id):
     db.add(row)
     await db.flush()
     return row
-
-
-async def record_asset(db, project_id, data, actor_id):
-    action = await db.scalar(
-        select(ActionPlan)
-        .where(ActionPlan.project_id == project_id, ActionPlan.id == data.action_id)
-        .with_for_update()
-    )
-    if action is None:
-        raise HTTPException(404, "Action not found")
-    request_hash = stable_hash(data.model_dump(mode="json", by_alias=True))
-    previous = await db.scalar(
-        select(PublishedAsset).where(
-            PublishedAsset.project_id == project_id,
-            PublishedAsset.idempotency_key == data.idempotency_key,
-        )
-    )
-    if previous:
-        if previous.request_hash != request_hash:
-            raise HTTPException(409, "Asset key reused for a different request")
-        return previous
-    asset = PublishedAsset(
-        project_id=project_id,
-        action_id=action.id,
-        url=data.url,
-        channel=data.channel,
-        content_hash=data.content_hash,
-        published_at=data.published_at.astimezone(UTC).replace(tzinfo=None),
-        reason=data.reason,
-        actor_id=actor_id,
-        idempotency_key=data.idempotency_key,
-        request_hash=request_hash,
-    )
-    db.add(asset)
-    await db.flush()
-    return asset
-
-
-def asset_view(row):
-    return {
-        "id": row.id,
-        "action_id": row.action_id,
-        "url": row.url,
-        "channel": row.channel,
-        "content_hash": row.content_hash,
-        "published_at": utc_isoformat(row.published_at),
-        "verification": "human_reported",
-        "reason": row.reason,
-        "publication_authorized": False,
-    }

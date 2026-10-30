@@ -99,6 +99,7 @@ async def test_competitive_diagnosis_can_create_idempotent_existing_action_plan(
 
     audit = await fixture_audit(db_session)
     run = await prepare_run(db_session, "p1", audit.id)
+    run.status = "partial"
     _, summary = fixture()
     summary["diagnoses"] = competitive_diagnoses(run, summary)
     await persist_diagnoses(db_session, run, summary)

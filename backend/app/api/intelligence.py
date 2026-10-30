@@ -2,8 +2,8 @@
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.access import get_audit_for_project, require_project_scope
@@ -97,6 +97,13 @@ async def sync_project_brand_context(
     return {"version": event.version, "content_hash": event.content_hash}
 
 
+@router.get("/projects/{project_id}/scenario-preferences")
+async def get_scenario_preferences(project_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.project_context import preference_projection
+    require_project_scope(user, project_id)
+    return preference_projection(await context_snapshot(db, project_id))
+
+
 from app.intelligence.aliases import AliasRequest, alias_snapshot, decide_alias
 from app.intelligence.mention_bindings import (
     MentionBindingRequest,
@@ -168,15 +175,12 @@ async def review_alias(
 
 
 from app.intelligence.measurement import (
-    AssetRequest,
     CohortRequest,
     CompareRequest,
     RetestRequest,
-    asset_view,
     checked_spec,
     compare_cohort,
     create_cohort,
-    record_asset,
     start_retest,
 )
 from app.intelligence.models import (
@@ -185,6 +189,8 @@ from app.intelligence.models import (
     MeasurementResult,
     PublishedAsset,
 )
+from app.intelligence.publication import PublicationRequest as AssetRequest
+from app.intelligence.publication import asset_view, publication_options, record_asset
 
 
 async def measurement_cohort(db, user, cohort_id):
@@ -216,25 +222,36 @@ def cohort_view(row):
         "minimum_prompt_clusters": spec["min_prompts"],
         "minimum_rounds": spec["min_rounds"],
         "specification_hash": row.specification_hash,
+        "comparison_mode": spec.get("comparison_mode", "inferential_v1"),
+        "metric_version": spec["version"],
+        "brand_targets": spec.get("brand_targets", []),
+        "question_scope": spec.get("question_scope", []),
+        "action_link": spec.get("action_link"),
+        "questions": [{"platform": slot["platform"], "prompt_hash": slot["prompt_hash"], "text": slot.get("prompt")} for slot in spec["slots"] if slot["sample_index"] == 1],
     }
 
 
 @router.get("/projects/{project_id}/cohorts")
 async def list_cohorts(
     project_id: str,
+    before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    rows = (
-        await db.scalars(
-            select(MeasurementCohort)
-            .where(MeasurementCohort.project_id == project_id)
-            .order_by(MeasurementCohort.created_at.desc())
-            .limit(50)
-        )
-    ).all()
-    return {"cohorts": [cohort_view(row) for row in rows]}
+    query = select(MeasurementCohort).where(MeasurementCohort.project_id == project_id)
+    if before:
+        cursor = await db.scalar(query.where(MeasurementCohort.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Cohort page not found")
+        query = query.where(or_(MeasurementCohort.created_at < cursor.created_at, and_(MeasurementCohort.created_at == cursor.created_at, MeasurementCohort.id < cursor.id)))
+    rows = list(await db.scalars(query.order_by(MeasurementCohort.created_at.desc(), MeasurementCohort.id.desc()).limit(51)))
+    return {"cohorts": [cohort_view(row) for row in rows[:50]], "next_before": rows[49].id if len(rows) > 50 else None}
+
+
+@router.get("/cohorts/{cohort_id}")
+async def get_cohort(cohort_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return cohort_view(await measurement_cohort(db, user, cohort_id))
 
 
 @router.post("/projects/{project_id}/cohorts", status_code=202)
@@ -284,28 +301,25 @@ async def list_retests(
                 CohortRetest.project_id == cohort.project_id,
                 CohortRetest.cohort_id == cohort.id,
             )
-            .order_by(CohortRetest.created_at.desc())
-            .limit(50)
+            .order_by(CohortRetest.created_at.desc(), CohortRetest.id.desc())
+            .limit(51)
         )
     ).all()
-    items = []
-    for row in rows:
-        state = await db.scalar(
-            select(AuditIntelligenceState).where(
-                AuditIntelligenceState.project_id == cohort.project_id,
-                AuditIntelligenceState.audit_id == row.audit_id,
-            )
-        )
-        audit = await get_audit_for_project(db, user, row.audit_id)
-        items.append(
-            {
-                "id": row.id,
-                "audit_id": str(row.audit_id),
-                "capture_status": audit.status.value,
-                "published_run_id": state.published_run_id if state else None,
-            }
-        )
-    return {"retests": items}
+    from app.intelligence.retest_retry import retest_state
+
+    return {"retests": [await retest_state(db, cohort, row) for row in rows[:50]], "truncated": len(rows) > 50}
+
+
+from app.intelligence.retest_retry import RetryRequest, repair_retest
+
+
+@router.post("/cohorts/{cohort_id}/retests/{retest_id}/retry", status_code=202)
+async def retry_missing_answers(cohort_id: str, retest_id: str, data: RetryRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cohort = await measurement_cohort(db, user, cohort_id)
+    action_writer(user)
+    result = await repair_retest(db, cohort, retest_id, data, str(user["sub"]))
+    await db.commit()
+    return result
 
 
 @router.post("/cohorts/{cohort_id}/results", status_code=202)
@@ -319,11 +333,9 @@ async def measure_cohort(
     action_writer(user)
     row = await compare_cohort(db, cohort, data, str(user["sub"]))
     await db.commit()
-    return {
-        "id": row.id,
-        "comparison_signature": row.comparison_signature,
-        **row.result,
-    }
+    from app.intelligence.measurement_history import saved_measurements
+
+    return (await saved_measurements(db, cohort.project_id, [(row, cohort)]))[0]
 
 
 @router.get("/cohorts/{cohort_id}/results")
@@ -340,20 +352,13 @@ async def measurement_results(
                 MeasurementResult.project_id == cohort.project_id,
                 MeasurementResult.cohort_id == cohort.id,
             )
-            .order_by(MeasurementResult.created_at.desc())
-            .limit(10)
+            .order_by(MeasurementResult.created_at.desc(), MeasurementResult.id.desc())
+            .limit(11)
         )
     ).all()
-    return {
-        "results": [
-            {
-                "id": row.id,
-                "comparison_signature": row.comparison_signature,
-                **row.result,
-            }
-            for row in rows
-        ]
-    }
+    from app.intelligence.measurement_history import saved_measurements
+
+    return {"results": await saved_measurements(db, cohort.project_id, [(row, cohort) for row in rows[:10]]), "truncated": len(rows) > 10}
 
 
 @router.post("/projects/{project_id}/assets", status_code=202)
@@ -365,31 +370,98 @@ async def register_asset(
 ):
     require_project_scope(user, project_id)
     action_writer(user)
-    row = await record_asset(db, project_id, data, str(user["sub"]))
+    row = await record_asset(db, project_id, data, str(user["sub"]), user.get("role", "viewer"))
     await db.commit()
     return asset_view(row)
+
+
+@router.get("/actions/{action_id}/publication-options")
+async def publication_version_options(action_id: str, revision: int | None = Query(None, ge=1), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    require_project_scope(user, user.get("pid", ""))
+    return await publication_options(db, user["pid"], action_id, revision, str(user.get("sub", "")), user.get("role", "viewer"))
+
+
+@router.get("/projects/{project_id}/publication-actions")
+async def publication_actions(project_id: str, before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.action_revisions import revision_integrity
+
+    require_project_scope(user, project_id)
+    query = select(ActionPlan, ActionPlanRevision).join(ActionPlanRevision, (ActionPlanRevision.project_id == ActionPlan.project_id) & (ActionPlanRevision.action_id == ActionPlan.id) & (ActionPlanRevision.revision == ActionPlan.revision)).where(ActionPlan.project_id == project_id)
+    if before:
+        cursor = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == project_id, ActionPlan.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Action page not found")
+        query = query.where(or_(ActionPlan.created_at < cursor.created_at, and_(ActionPlan.created_at == cursor.created_at, ActionPlan.id < cursor.id)))
+    rows = (await db.execute(query.order_by(ActionPlan.created_at.desc(), ActionPlan.id.desc()).limit(51))).all()
+    return {"actions": [{"id": action.id, "title": revision.payload["title"], "revision": revision.revision, "revision_id": revision.id,
+                         "run_id": revision.run_id, "integrity_valid": revision_integrity(action, revision), "task_pack_available": bool(revision.payload["target"].get("task_pack"))}
+                        for action, revision in rows[:50]], "next_before": rows[49][0].id if len(rows) > 50 else None}
 
 
 @router.get("/projects/{project_id}/assets")
 async def list_assets(
     project_id: str,
+    action_id: str | None = Query(None, alias="actionId", pattern=r"^[a-f0-9]{32}$"),
+    revision: int | None = Query(None, ge=1),
+    before: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    rows = (
-        await db.scalars(
-            select(PublishedAsset)
-            .where(PublishedAsset.project_id == project_id)
-            .order_by(PublishedAsset.created_at.desc())
-            .limit(50)
-        )
-    ).all()
-    return {"assets": [asset_view(row) for row in rows]}
+    query = select(PublishedAsset).where(PublishedAsset.project_id == project_id)
+    if revision is not None and not action_id:
+        raise HTTPException(422, "Asset revision requires an action scope")
+    if action_id:
+        query = query.where(PublishedAsset.action_id == action_id)
+    if revision is not None:
+        query = query.where(PublishedAsset.provenance["revision"].as_integer() == revision)
+    if before:
+        cursor = await db.scalar(query.where(PublishedAsset.id == before))
+        if cursor is None:
+            raise HTTPException(404, "Publication page not found in this scope")
+        query = query.where(or_(PublishedAsset.created_at < cursor.created_at, and_(PublishedAsset.created_at == cursor.created_at, PublishedAsset.id < cursor.id)))
+    rows = list(await db.scalars(query.order_by(PublishedAsset.created_at.desc(), PublishedAsset.id.desc()).limit(51)))
+    return {"assets": [asset_view(row) for row in rows[:50]], "next_before": rows[49].id if len(rows) > 50 else None}
 
 
 from app.intelligence.drafts import DraftRequest, authorize_draft, export_brief
 from app.intelligence.models import DraftApproval
+
+
+@router.get("/actions/{action_id}/eligible-facts")
+async def eligible_action_facts(
+    action_id: str, expected_revision: int = Query(ge=1),
+    offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.fact_qualification import eligible_facts
+
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    await action_run(db, user, action.run_id)
+    return await eligible_facts(db, action, expected_revision, offset=offset, limit=limit)
+
+
+@router.get("/actions/{action_id}/draft-approvals")
+async def content_approval_state(action_id: str, expected_revision: int = Query(ge=1),
+                                 user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.action_revisions import current_revision, revision_integrity
+
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    await action_run(db, user, action.run_id)
+    revision, _ = await current_revision(db, action)
+    if revision.revision != expected_revision or not revision_integrity(action, revision):
+        raise HTTPException(409, "Action revision changed; refresh content authorization")
+    grant = await db.scalar(select(DraftApproval).where(DraftApproval.project_id == user["pid"], DraftApproval.action_id == action.id).order_by(DraftApproval.version.desc()).limit(1))
+    return {"schema_version": 3, "action_id": action.id, "revision": revision.revision, "revision_id": revision.id,
+            "latest_version": grant.version if grant else 0, "approval_id": grant.id if grant else None,
+            "bound_to_current_revision": bool(grant and grant.payload.get("actionRevision", {}).get("id") == revision.id),
+            "authorization_state": "not_verified", "can_authorize": user.get("role") in ("owner", "admin", "editor")}
 
 
 @router.post("/actions/{action_id}/draft-approvals", status_code=202)
@@ -526,6 +598,12 @@ async def retract_fact(
     )
     if fact is None:
         raise HTTPException(404, "Fact not found")
+    if fact.source_kind == "owned_asset_revision":
+        from app.intelligence.owned_facts import withdraw_owned_fact
+
+        new = await withdraw_owned_fact(db, fact, data, str(user["sub"]))
+        await db.commit()
+        return await fact_view(db, new)
     review = await db.scalar(
         select(ClaimReview).where(
             ClaimReview.project_id == fact.project_id, ClaimReview.id == fact.review_id
@@ -537,6 +615,13 @@ async def retract_fact(
     return await fact_view(db, new)
 
 
+from app.intelligence.action_revisions import (
+    RevisionRequest,
+    current_revision,
+    revise_plan,
+    revision_changes,
+    revision_history,
+)
 from app.intelligence.actions import (
     ApprovalRequest,
     PlanRequest,
@@ -544,7 +629,7 @@ from app.intelligence.actions import (
     create_plan,
     plan_view,
 )
-from app.intelligence.models import ActionPlan
+from app.intelligence.models import ActionPlan, ActionPlanRevision
 
 
 async def action_run(db, user, run_id):
@@ -577,11 +662,83 @@ async def list_action_plans(
     actions = (
         await db.scalars(
             select(ActionPlan)
-            .where(ActionPlan.project_id == run.project_id, ActionPlan.run_id == run.id)
+            .join(ActionPlanRevision, (ActionPlanRevision.project_id == ActionPlan.project_id)
+                  & (ActionPlanRevision.action_id == ActionPlan.id) & (ActionPlanRevision.revision == ActionPlan.revision))
+            .where(ActionPlan.project_id == run.project_id, ActionPlanRevision.run_id == run.id)
             .order_by(ActionPlan.created_at)
         )
     ).all()
     return {"actions": [await plan_view(db, action, run) for action in actions]}
+
+
+async def scoped_action(db, user, action_id):
+    require_project_scope(user, user.get("pid", ""))
+    action = await db.scalar(select(ActionPlan).where(ActionPlan.project_id == user["pid"], ActionPlan.id == action_id))
+    if action is None:
+        raise HTTPException(404, "Action not found")
+    return action
+
+
+@router.get("/actions/{action_id}")
+async def action_detail(action_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action = await scoped_action(db, user, action_id)
+    _, run = await current_revision(db, action)
+    return await plan_view(db, action, run)
+
+
+@router.get("/actions/{action_id}/revisions")
+async def action_revision_history(action_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+                                  user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action = await scoped_action(db, user, action_id)
+    return {"action_id": action.id, "current_revision": action.revision, "offset": offset, "limit": limit,
+            "revisions": await revision_history(db, action, offset, limit)}
+
+
+from app.intelligence.execution import (
+    ExecutionRequest,
+    change_execution,
+    execution_events,
+    read_execution,
+)
+
+
+@router.get("/actions/{action_id}/execution")
+async def action_execution(action_id: str, revision: int = Query(ge=1), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action = await scoped_action(db, user, action_id)
+    return await read_execution(db, action, revision)
+
+
+@router.get("/actions/{action_id}/execution/events")
+async def action_execution_history(action_id: str, revision: int = Query(ge=1), before: int | None = Query(None, ge=1), limit: int = Query(20, ge=1, le=100), user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action = await scoped_action(db, user, action_id)
+    return await execution_events(db, action, revision, before, limit)
+
+
+@router.post("/actions/{action_id}/execution", status_code=202)
+async def update_action_execution(action_id: str, data: ExecutionRequest, request: Request, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.semantics import stable_hash
+
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    action_writer(user)
+    action = await scoped_action(db, user, action_id)
+    result = await change_execution(db, action, data, user, stable_hash(await request.json()))
+    await db.commit()
+    return result
+
+
+@router.post("/actions/{action_id}/revisions", status_code=202)
+async def create_action_revision(action_id: str, data: RevisionRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    action_writer(user)
+    action = await scoped_action(db, user, action_id)
+    row = await revise_plan(db, action, data, str(user["sub"]))
+    await db.commit()
+    _, run = await current_revision(db, action)
+    return {"created_revision": row.revision, "revision_id": row.id, "changes_from_previous": await revision_changes(db, row), "action": await plan_view(db, action, run)}
 
 
 @router.post("/runs/{run_id}/actions", status_code=202)
@@ -616,7 +773,7 @@ async def approve_action_plan(
     )
     if action is None:
         raise HTTPException(404, "Action not found")
-    run = await action_run(db, user, action.run_id)
+    _, run = await current_revision(db, action)
     await approve_plan(db, action, run, data, str(user["sub"]), user["role"])
     await db.commit()
     return await plan_view(db, action, run)
@@ -636,23 +793,110 @@ from app.intelligence.identity import (
 
 @router.get("/runs/{run_id}/evaluation-cohort")
 async def get_evaluation_cohort(run_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.question_context import scenario_summary
     run = await action_run(db, user, run_id)
     latest = await latest_cohort_review(db, run.project_id, run.audit_id)
     return {"base": run.manifest.get("evaluation_base_cohort") or run.manifest.get("evaluation_cohort"),
             "cohort": run.manifest.get("evaluation_cohort"),
             "latest_review_version": latest.version if latest else 0,
-            "applied_review": run.manifest.get("evaluation_review")}
+            "latest_cohort": latest.cohort if latest else None,
+            "applied_review": run.manifest.get("evaluation_review"),
+            "scenario_summary": scenario_summary(run.manifest.get("evaluation_cohort"))}
 
 
 @router.post("/runs/{run_id}/evaluation-cohort/review", status_code=202)
 async def submit_evaluation_cohort(run_id: str, data: CohortReviewRequest, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     action_writer(user)
     run = await action_run(db, user, run_id)
-    if run.status not in ("ready", "partial"):
+    if run.status not in ("ready", "partial", "failed"):
         raise HTTPException(409, "Wait for completed analysis")
     event = await review_cohort(db, run, data, str(user["sub"]))
     await db.commit()
     return {"id": event.id, "version": event.version, "cohort_hash": event.cohort["hash"], "refresh_pending": True}
+
+
+@router.get("/runs/{run_id}/scenarios")
+async def get_run_scenarios(run_id: str, user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.intelligence.question_context import scenario_projection
+    run = await action_run(db, user, run_id)
+    return scenario_projection(run.manifest, view(run)["summary"]["brand_presence"])
+
+
+@router.get("/runs/{run_id}/information-units")
+async def get_information_units(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    owner_kind: str | None = Query(None, pattern=r"^(answer|citation|snapshot)$"),
+    owner_id: str | None = Query(None, max_length=64),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("information_units", {})
+    rows = [row for row in projection.get("observations", [])
+            if (owner_kind is None or row["owner_kind"] == owner_kind)
+            and (owner_id is None or row["owner_id"] == owner_id)]
+    return {"version": projection.get("version"), "status": projection.get("status", "pending"),
+            "total": len(rows), "items": rows[offset:offset + limit],
+            "next_offset": offset + limit if offset + limit < len(rows) else None}
+
+
+@router.get("/runs/{run_id}/context-analyses")
+async def get_context_analyses(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("context_analysis", {})
+    rows = projection.get("observations", [])
+    return {**{key: value for key, value in projection.items() if key != "observations"},
+            "total": len(rows), "items": rows[offset:offset + limit],
+            "next_offset": offset + limit if offset + limit < len(rows) else None}
+
+
+@router.get("/runs/{run_id}/source-observations")
+async def get_source_observations(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    document_id: str | None = Query(None, max_length=32),
+    platform: str | None = Query(None, max_length=50),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("source_observations", {})
+    rows = [row for row in projection.get("observations", [])
+            if (document_id is None or row.get("document_id") == document_id)
+            and (platform is None or row.get("platform") == platform)]
+    return {"version": projection.get("version"), "status": "published" if projection else "pending",
+            "items": rows[offset:offset + limit], "total": len(rows),
+            "next_offset": offset + limit if offset + limit < len(rows) else None,
+            "independent_publishers": projection.get("independent_publishers"),
+            "content_family_coverage": projection.get("content_family_coverage")}
+
+
+@router.get("/runs/{run_id}/opportunities")
+async def get_opportunities(
+    run_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    priority: str = Query("frozen", pattern=r"^(frozen|current)$"),
+    own_target_id: str | None = Query(None, max_length=200),
+    platform: str | None = Query(None, max_length=50),
+    user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    run = await action_run(db, user, run_id)
+    projection = (run.summary or {}).get("opportunities", {})
+    rows = projection.get("items", [])
+    policy = projection.get("policy")
+    current_context = None
+    if priority == "current":
+        from app.intelligence.opportunity_tasks import rank_opportunities
+
+        current_context = await context_snapshot(db, run.project_id)
+        rows, policy = rank_opportunities(rows, current_context)
+    filtered = [row for row in rows if (own_target_id is None or row["own_target_id"] == own_target_id)
+                and (platform is None or platform in row["platforms"])]
+    return {**{key: value for key, value in projection.items() if key not in ("items", "policy")},
+            "policy": policy, "ranking_scope": priority, "frozen_run_unchanged": True,
+            "ranking_only_not_evidence_refresh": priority == "current",
+            "registry_context_changed": priority == "current" and (current_context or {}).get("brands", []) != (run.manifest.get("brand_context") or {}).get("brands", []),
+            "items": filtered[offset:offset + limit], "total": len(filtered),
+            "next_offset": offset + limit if offset + limit < len(filtered) else None}
 
 
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
@@ -936,6 +1180,12 @@ def require_writer(user: dict):
 
 
 def view(run):
+    from app.intelligence.brand_presence import build_brand_presence
+    from app.intelligence.readiness import result_readiness
+
+    summary = dict(run.summary or {})
+    if "brand_presence" not in summary:
+        summary["brand_presence"] = build_brand_presence(run.manifest, [], [], [], {}, {})
     return {
         "id": run.id,
         "audit_id": str(run.audit_id),
@@ -946,7 +1196,8 @@ def view(run):
         "signature": run.signature,
         "input_hash": run.input_hash,
         "coverage": run.coverage,
-        "summary": run.summary,
+        "summary": summary,
+        "readiness": result_readiness(run.manifest, run.coverage or {}, summary, run.status),
         "sources": run.manifest.get("sources", []),
         "responses": [
             {
@@ -1065,16 +1316,36 @@ async def list_runs(
     db: AsyncSession = Depends(get_db),
 ):
     require_project_scope(user, project_id)
-    query = select(IntelligenceRun).where(IntelligenceRun.project_id == project_id)
+    query = select(IntelligenceRun.id).where(IntelligenceRun.project_id == project_id)
     if audit_id is not None:
         query = query.where(IntelligenceRun.audit_id == audit_id)
-    rows = (
+    run_ids = (
         await db.scalars(
             query.order_by(
-                IntelligenceRun.created_at.desc(), IntelligenceRun.revision.desc()
+                IntelligenceRun.created_at.desc(),
+                IntelligenceRun.revision.desc(),
+                IntelligenceRun.id.desc(),
             ).limit(limit)
         )
     ).all()
+    # Keep immutable manifests and analysis JSON out of MySQL's sort buffer.
+    # Fetch the list projection without SQL sorting, then restore the ID order.
+    rows = (
+        await db.execute(
+            select(
+                IntelligenceRun.id,
+                IntelligenceRun.audit_id,
+                IntelligenceRun.revision,
+                IntelligenceRun.status,
+                IntelligenceRun.created_at,
+                IntelligenceRun.coverage,
+            ).where(
+                IntelligenceRun.project_id == project_id,
+                IntelligenceRun.id.in_(run_ids),
+            )
+        )
+    ).all() if run_ids else []
+    rows_by_id = {run.id: run for run in rows}
     return {
         "enabled": settings.intelligence_enabled,
         "runs": [
@@ -1086,7 +1357,8 @@ async def list_runs(
                 "created_at": run.created_at,
                 "coverage": run.coverage,
             }
-            for run in rows
+            for run_id in run_ids
+            if (run := rows_by_id.get(run_id)) is not None
         ],
     }
 
@@ -1106,6 +1378,8 @@ async def get_run(
     if not run:
         raise HTTPException(404, "Run not found")
     result = view(run)
+    from app.intelligence.question_context import scenario_projection
+    result["summary"]["scenario_comparison"] = scenario_projection(run.manifest, result["summary"]["brand_presence"])
     reviews = await identity_snapshot(db, run.project_id)
     observed = {entity["id"] for entity in run.summary.get("entities", [])}
     result["identity_reviews"] = {
@@ -1243,3 +1517,8 @@ async def saved_measurement_history(
     return await measurement_history(
         db, project_id, cohort_id, utcnow() - timedelta(days=history_days)
     )
+
+
+from app.api.intelligence_owned import router as owned_router
+
+router.include_router(owned_router)

@@ -291,7 +291,7 @@ async def test_review_api_scope(
 
 @pytest.mark.asyncio
 async def test_fact_validity_expiration_and_source_integrity(db_session, monkeypatch):
-    import app.intelligence.reviews as reviews_module
+    import app.intelligence.owned_facts as facts_module
 
     run, evidence, entity, source = await fixture_evidence(db_session)
     review = await review_claim(
@@ -300,7 +300,7 @@ async def test_fact_validity_expiration_and_source_integrity(db_session, monkeyp
     fact = await approve_fact(db_session, run, fact_request(review, entity), "reviewer")
     await db_session.commit()
     monkeypatch.setattr(
-        reviews_module, "utcnow", lambda: fact.valid_until + timedelta(seconds=1)
+        facts_module, "utcnow", lambda: fact.valid_until + timedelta(seconds=1)
     )
     assert (await fact_view(db_session, fact))["status"] == "expired"
     snapshot = await db_session.scalar(
@@ -340,7 +340,8 @@ async def test_human_review_change_invalidates_existing_plan_approval(db_session
     run, evidence, _, source = await fixture_evidence(db_session)
     summary = {
         "diagnoses": [
-            {"id": "f" * 64, "platform": "qwen", "action": {"task": "核实质保范围"}}
+            {"id": "f" * 64, "platform": "qwen", "evidence_ids": [evidence.id],
+             "source_ids": [evidence.citation_id], "action": {"task": "核实质保范围"}}
         ]
     }
     await persist_diagnoses(db_session, run, summary)

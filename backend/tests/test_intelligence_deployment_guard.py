@@ -27,6 +27,7 @@ def test_worker_identity_defaults_are_unique_and_candidate_can_be_explicit():
 @pytest.mark.parametrize("url", [
     "mysql+aiomysql://user:pass@mysql/aiscope",
     "mysql+aiomysql://user:pass@mysql/intelligence_ci",
+    "mysql+aiomysql://user:pass@mysql/intelligence_production",
     "mysql+aiomysql://user:pass@mysql/intelligence_production_suffix",
     "sqlite:///intelligence_production",
 ])
@@ -34,14 +35,14 @@ def test_guard_rejects_any_database_other_than_exact_new_production_schema(monke
     from app.config import settings
 
     monkeypatch.setattr(settings, "database_url", url)
-    with pytest.raises(RuntimeError, match="outside intelligence_production"):
+    with pytest.raises(RuntimeError, match="outside intelligence_value_20261030"):
         guarded_database_url()
 
 
 def test_guard_allows_only_explicit_production_oss_configuration(monkeypatch):
     from app.config import settings
 
-    monkeypatch.setattr(settings, "database_url", "mysql+aiomysql://user:pass@mysql/intelligence_production")
+    monkeypatch.setattr(settings, "database_url", "mysql+aiomysql://user:pass@mysql/intelligence_value_20261030")
     monkeypatch.setenv("AISCOPE_DEBUG", "0")
     monkeypatch.setattr(settings, "intelligence_enabled", True)
     monkeypatch.setattr(settings, "intelligence_environment", "production")
@@ -56,7 +57,7 @@ def test_guard_allows_only_explicit_production_oss_configuration(monkeypatch):
 def test_production_guard_requires_explicit_debug_off(monkeypatch, debug):
     from app.config import settings
 
-    monkeypatch.setattr(settings, "database_url", "mysql+aiomysql://user:pass@mysql/intelligence_production")
+    monkeypatch.setattr(settings, "database_url", "mysql+aiomysql://user:pass@mysql/intelligence_value_20261030")
     if debug is None:
         monkeypatch.delenv("AISCOPE_DEBUG", raising=False)
     else:

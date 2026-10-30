@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0.0] - 2026-10-30
+
+### Added
+- Analyze all discovered brand targets with reviewed scenario context, anchored information units, source observations and independent evaluation readiness.
+- Store versioned own-brand materials and approved facts, then derive evidence-bound task packages with immutable revisions and exact approvals.
+- Track revision-scoped execution, provenance receipts, named delivery acceptance, publication versions and one frozen follow-up observation.
+- Reserve and settle analysis budgets by phase, preserving verified evidence and explicit semantic failure or unknown states.
+
+### Changed
+- Initialize the reviewed 60-table baseline in a separate empty production database; retain the previous release's image, private configuration and database for rollback.
+- Use the complete v3 content contract, normalized capture conditions and bounded list queries for large analysis results.
+
 ## 1.2.0.0 — 2026-10-23
 
 新增版本化品牌评分、冻结比较样本、问题资格审核、严格推荐排名验证、平台/场景竞争差距及证据绑定行动计划。新增审核记录表迁移，保留旧分析修订。

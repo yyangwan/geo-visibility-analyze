@@ -5,10 +5,12 @@ from fractions import Fraction
 from math import floor
 
 from app.intelligence.brand_ranking import verified_ranking
+from app.intelligence.question_context import VERSION as CONTEXT_VERSION
+from app.intelligence.question_context import question_proposal
 from app.intelligence.semantics import stable_hash
 
 VERSION = "brand-visibility-v1"
-COHORT_VERSION = "brand-cohort-v1"
+COHORT_VERSION = "brand-cohort-v2"
 WEIGHTS = {"presence": 30, "recommendation": 30, "position": 20, "reasons": 20}
 
 
@@ -34,14 +36,17 @@ def freeze_cohort(samples, brands):
         if key in seen:
             continue
         seen.add(key)
-        directed = any(name in sample["prompt"].casefold() for name in names)
+        context = question_proposal(sample["prompt"], names)
+        directed = any(row["fixed_exclusion"] for row in context["registered_references"])
         cells.append(
             {
                 **sample,
+                "question_context": context,
+                "primary_scenario": None,
                 "eligibility": "excluded" if directed else "needs_review",
                 "eligibility_reason": "named_registered_brand"
                 if directed
-                else "neutrality_not_verified",
+                else "registered_name_ambiguous" if context["registered_references"] else "neutrality_not_verified",
             }
         )
     candidates = [cell for cell in cells if cell["eligibility"] != "excluded"]
@@ -68,7 +73,8 @@ def freeze_cohort(samples, brands):
         "version": COHORT_VERSION,
         "rule_version": VERSION,
         "weight_policy": "equal-platform-category-prompt-v1",
-        "eligibility_policy": "registered-name-screen-review-required-v1",
+        "eligibility_policy": "registered-reference-screen-review-required-v2",
+        "question_context_version": CONTEXT_VERSION,
         "cells": sorted(
             cells, key=lambda item: (item["platform"], item["prompt_hash"])
         ),
@@ -87,19 +93,24 @@ def score_observation(
     list_size=None,
     reasons=None,
     evidence_ids=(),
+    mention_evidence_ids=(),
 ):
     dimensions = dict.fromkeys(WEIGHTS)
-    if not complete or not identity_confirmed or present is None:
+    if not identity_confirmed or present is None:
         return {"score": None, "dimensions": dimensions, "status": "pending"}
     if not present:
+        if not complete:
+            return {"score": None, "dimensions": dimensions, "status": "pending"}
         return {
             "score": 0,
             "dimensions": dict.fromkeys(WEIGHTS, 0),
             "status": "complete",
         }
-    if not evidence_ids:
+    if not evidence_ids and not mention_evidence_ids:
         return {"score": None, "dimensions": dimensions, "status": "pending"}
     dimensions["presence"] = 100
+    if not complete:
+        return {"score": None, "dimensions": dimensions, "status": "partial"}
     if type(recommendation) is int and 0 <= recommendation <= 4:
         dimensions["recommendation"] = recommendation * 25
     if type(rank) is int and type(list_size) is int and 1 <= rank <= list_size:
@@ -171,33 +182,14 @@ def aggregate_scores(cohort, scores):
 
 def summarize_answer_scores(manifest, applications, entities, mentions, signals):
     """Conservative whole-answer projection; no majority vote across contradictions."""
+    from app.intelligence.analysis_coverage import answer_coverage, related_span_defects
+
+    proofs = answer_coverage(manifest, applications)
     rows = []
     cohort = manifest.get("evaluation_cohort")
     for response in manifest["responses"]:
-        segments = sorted(
-            [
-                (application, segment, cache)
-                for application, segment, cache in applications
-                if segment.owner_kind == "answer" and segment.owner_id == response["id"]
-            ],
-            key=lambda row: row[1].start_offset,
-        )
-        cursor = 0
-        complete = (
-            bool(segments)
-            and not response["error"]
-            and response.get("answer_status", "complete") == "complete"
-        )
-        for application, segment, cache in segments:
-            complete = (
-                complete
-                and segment.start_offset == cursor
-                and application.status == "completed"
-                and bool(cache)
-                and cache.result.get("brand_signals") is not None
-            )
-            cursor = segment.end_offset
-        complete = complete and cursor == len(response["text"])
+        proof = proofs[response["id"]]
+        complete = proof["input_processed"]
         answer_mentions = [
             item
             for item in mentions
@@ -218,6 +210,9 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
         for entity in entities:
             if entity["kind"] not in ("brand", "organization", "product"):
                 continue
+            if (entity.get("role", "unregistered") == "unregistered"
+                and entity.get("comparison_context_status") == "not_solution"):
+                continue
             observed = [
                 item
                 for item in signals["observations"]
@@ -230,7 +225,17 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
             identity_ok = (
                 entity["identity_status"] == "confirmed"
                 and not entity.get("role_conflict")
-                and not any(item["identity_ambiguity"] for item in answer_mentions)
+                and not (entity.get("role", "unregistered") == "unregistered"
+                         and entity.get("comparison_context_status") == "unknown")
+                and not (entity.get("role", "unregistered") == "unregistered"
+                         and "answer_context_roles" in entity
+                         and presence
+                         and "evaluated_solution" not in entity["answer_context_roles"].get(response["id"], []))
+                and not any(
+                    item["identity_ambiguity"]
+                    for item in answer_mentions
+                    if item["entity_id"] == entity["id"]
+                )
             )
             values = {}
             conflicts = []
@@ -240,7 +245,15 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
                 if len(distinct) > 1:
                     conflicts.append(field)
             result = score_observation(
-                complete=complete,
+                complete=complete
+                and not related_span_defects(
+                    proof,
+                    [
+                        entity.get("name", ""),
+                        entity.get("canonical_name", ""),
+                        *entity.get("observed_names", []),
+                    ],
+                ),
                 identity_confirmed=identity_ok,
                 present=presence,
                 recommendation=values["recommendation"],
@@ -252,6 +265,11 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
                 if not conflicts
                 else None,
                 evidence_ids=[item["id"] for item in observed],
+                mention_evidence_ids=[
+                    item["id"]
+                    for item in answer_mentions
+                    if item["entity_id"] == entity["id"] and item.get("id")
+                ],
             )
             rows.append(
                 {
@@ -273,6 +291,9 @@ def summarize_answer_scores(manifest, applications, entities, mentions, signals)
     if cohort:
         for entity in entities:
             if entity["kind"] not in ("brand", "organization", "product"):
+                continue
+            if (entity.get("role", "unregistered") == "unregistered"
+                and entity.get("comparison_context_status") == "not_solution"):
                 continue
             entity_rows = [row for row in rows if row["entity_id"] == entity["id"]]
             by_sample = defaultdict(list)

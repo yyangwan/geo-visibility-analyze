@@ -1,9 +1,9 @@
 """Portal-owned versioned registered-brand context; immutable receiver receipts."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import HTTPException
-from pydantic import Field, model_validator
+from pydantic import Field, StrictInt, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -16,6 +16,7 @@ from app.intelligence.models import (
     ProjectContextEvent,
     ProjectContextHead,
 )
+from app.intelligence.question_context import SCENARIOS, Scenario
 from app.intelligence.semantics import stable_hash
 
 
@@ -34,6 +35,14 @@ class ContextBrand(BrandSnapshot):
 class ContextRequest(StrictFact):
     version: int = Field(ge=1)
     brands: list[ContextBrand] = Field(max_length=200)
+    business_preferences: dict = Field(default_factory=dict)
+
+    @field_validator("business_preferences")
+    @classmethod
+    def checked_preferences(cls, value):
+        if value:
+            return BusinessPreferences.model_validate(value).model_dump()
+        return value
 
     @model_validator(mode="after")
     def unique_brands(self):
@@ -44,18 +53,48 @@ class ContextRequest(StrictFact):
         return self
 
 
-async def context_snapshot(db, project_id):
-    event = await db.scalar(
+class BusinessPreferences(StrictFact):
+    version: Literal["business-preferences-v1"]
+    scenario_importance: dict[
+        Scenario,
+        Annotated[StrictInt, Field(ge=0, le=100)],
+    ] = Field(max_length=8)
+    reason: str = Field(min_length=5, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value):
+        if len(value.strip()) < 5:
+            raise ValueError("Meaningful preference reason required")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def nonzero_importance(self):
+        if self.scenario_importance and not any(self.scenario_importance.values()):
+            raise ValueError("Keep neutral defaults or provide a positive importance")
+        return self
+
+
+def preference_projection(context):
+    preferences = (context or {}).get("business_preferences") or {}
+    values = preferences.get("scenario_importance", {})
+    return {"mode": "custom" if values else "neutral", "context_version": (context or {}).get("version", 0), "priority_policy_version": f"scenario-priority-v1:{(context or {}).get('version', 0)}:{(context or {}).get('content_hash', 'neutral')}", "importance": {key: values.get(key, 50) for key in SCENARIOS}, "reason": preferences.get("reason"), "taxonomy": SCENARIOS, "score_weights_changed": False}
+
+
+async def context_snapshot(db, project_id, *, lock=False):
+    query = (
         select(ProjectContextEvent)
         .where(ProjectContextEvent.project_id == project_id)
         .order_by(ProjectContextEvent.version.desc())
         .limit(1)
     )
+    event = await db.scalar(query.with_for_update().execution_options(populate_existing=True) if lock else query)
     return (
         {
             "version": event.version,
             "content_hash": event.content_hash,
             "brands": event.brands,
+            "business_preferences": event.business_preferences,
         }
         if event
         else None
@@ -105,7 +144,9 @@ async def receive_context(db, project_id, data, actor_id):
                     422, "Brand binding has no confirmed project identity proof"
                 )
     brands = [row.model_dump() for row in sorted(data.brands, key=lambda row: row.id)]
-    content_hash = stable_hash(brands)
+    content_hash = stable_hash(
+        {"brands": brands, "business_preferences": data.business_preferences}
+    )
     previous = await db.scalar(
         select(ProjectContextEvent)
         .where(
@@ -125,6 +166,7 @@ async def receive_context(db, project_id, data, actor_id):
         version=data.version,
         content_hash=content_hash,
         brands=brands,
+        business_preferences=data.business_preferences,
         received_by=actor_id,
     )
     head.version = data.version

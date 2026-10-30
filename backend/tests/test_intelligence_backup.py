@@ -16,8 +16,9 @@ from app.intelligence.backup import (
     verify_bundle,
 )
 from app.intelligence.blob import LocalBlobStore, digest
-from app.intelligence.models import SourceDocument, SourceSnapshot
+from app.intelligence.models import OwnedContentAsset, SourceDocument, SourceSnapshot
 from app.intelligence.schema_lock import SchemaLockUnavailable, schema_lock
+from app.intelligence.schema_version import SCHEMA_REVISION
 from tests.conftest import test_engine
 
 
@@ -75,38 +76,33 @@ def test_schema_mutex_commits_acquisition_before_body_and_releases_same_lock():
 @pytest.mark.parametrize("acquired", [0, None])
 def test_mutex_busy_or_unknown_never_runs_body(acquired):
     connection = FakeConnection(acquired=acquired)
-    with pytest.raises(SchemaLockUnavailable):
-        with schema_lock(connection):
-            pytest.fail("No ownership")
+    with pytest.raises(SchemaLockUnavailable), schema_lock(connection):
+        pytest.fail("No ownership")
     assert not any("RELEASE_LOCK" in sql for sql, _ in connection.events)
 
 
 def test_mutex_releases_after_failure_and_never_exposes_sql_credentials():
     connection = FakeConnection()
-    with pytest.raises(SchemaLockUnavailable) as error:
-        with schema_lock(connection):
-            raise RuntimeError("secret-key database password")
+    with pytest.raises(SchemaLockUnavailable) as error, schema_lock(connection):
+        raise RuntimeError("secret-key database password")
     assert "secret-key" not in str(error.value)
     assert any("RELEASE_LOCK" in sql for sql, _ in connection.events)
     connection = FakeConnection(released=None)
-    with pytest.raises(SchemaLockUnavailable):
-        with schema_lock(connection):
-            pass
+    with pytest.raises(SchemaLockUnavailable), schema_lock(connection):
+        pass
     assert connection.invalidated
 
 
 def test_mutex_refuses_existing_transaction_or_other_dialect():
     connection = FakeConnection()
     connection.in_transaction = lambda: True
-    with pytest.raises(SchemaLockUnavailable):
-        with schema_lock(connection):
-            pass
+    with pytest.raises(SchemaLockUnavailable), schema_lock(connection):
+        pass
     assert connection.events == []
     connection = FakeConnection()
     connection.dialect.name = "sqlite"
-    with pytest.raises(SchemaLockUnavailable):
-        with schema_lock(connection):
-            pass
+    with pytest.raises(SchemaLockUnavailable), schema_lock(connection):
+        pass
 
 
 @pytest.mark.parametrize(
@@ -190,6 +186,43 @@ async def test_full_bundle_includes_all_tables_and_actual_object_bytes(
     assert not (target / "INCOMPLETE").exists()
     with pytest.raises(FileExistsError):
         await export_bundle(backup_connection, store, target, allow_sqlite_test=True)
+
+
+@pytest.mark.asyncio
+async def test_owned_text_is_backed_up_without_a_fake_citation_or_source_snapshot(
+    backup_connection, db_session, tmp_path
+):
+    assert schema_head() == SCHEMA_REVISION
+    store = LocalBlobStore(tmp_path / "owned")
+    key, data = "projects/p1/owned/specs.gz", b"approved source revision fixture"
+    info = await store.put_immutable(key, data)
+    db_session.add(
+        OwnedContentAsset(
+            project_id="p1",
+            asset_key="asset1",
+            version=1,
+            registry_brand_id="own",
+            target_id="registry:own",
+            title="Owned specs",
+            source_kind="text",
+            text_key=key,
+            text_sha256=info.sha256,
+            status="captured",
+            actor_id="fixture",
+            idempotency_key="owned-fixture",
+            request_hash="a" * 64,
+        )
+    )
+    await db_session.commit()
+    target = tmp_path / "bundle"
+    result = await export_bundle(
+        backup_connection, store, target, allow_sqlite_test=True
+    )
+    assert result["objects"] == 1
+    assert verify_bundle(target) == result
+    (target / "objects" / (info.sha256 + ".bin")).unlink()
+    with pytest.raises((BackupInvalid, FileNotFoundError)):
+        verify_bundle(target)
 
 
 @pytest.mark.asyncio

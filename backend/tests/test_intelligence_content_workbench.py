@@ -23,10 +23,10 @@ from tests.test_intelligence_drafts import fixture_draft
 
 @pytest.mark.asyncio
 async def test_valid_material_projection_is_read_only_and_never_grants_publication(
-    db_session, monkeypatch
+    db_session, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(settings, "intelligence_enabled", True)
-    _, run, plan, _, request = await fixture_draft(db_session)
+    _, run, plan, _, request = await fixture_draft(db_session, tmp_path, monkeypatch)
     grant = await authorize_draft(db_session, plan, run, request, "reviewer")
     await db_session.commit()
     data = await content_workbench(db_session, "p1")
@@ -47,10 +47,10 @@ async def test_valid_material_projection_is_read_only_and_never_grants_publicati
 
 @pytest.mark.asyncio
 async def test_newer_expired_version_never_falls_back_to_an_old_approval(
-    db_session, monkeypatch
+    db_session, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(settings, "intelligence_enabled", True)
-    _, run, plan, _, request = await fixture_draft(db_session)
+    _, run, plan, _, request = await fixture_draft(db_session, tmp_path, monkeypatch)
     first = await authorize_draft(db_session, plan, run, request, "reviewer")
     newer = await authorize_draft(
         db_session,
@@ -77,11 +77,11 @@ async def test_newer_expired_version_never_falls_back_to_an_old_approval(
 
 
 @pytest.mark.asyncio
-async def test_new_queued_run_and_missing_state_block_export_without_creating_state(
-    db_session, monkeypatch
+async def test_unrelated_queued_run_and_missing_state_do_not_revoke_exact_authority(
+    db_session, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(settings, "intelligence_enabled", True)
-    _, run, plan, _, request = await fixture_draft(db_session)
+    _, run, plan, _, request = await fixture_draft(db_session, tmp_path, monkeypatch)
     grant = await authorize_draft(db_session, plan, run, request, "reviewer")
     await db_session.commit()
     newer = IntelligenceRun(
@@ -95,9 +95,8 @@ async def test_new_queued_run_and_missing_state_block_export_without_creating_st
     )
     db_session.add(newer)
     await db_session.flush()
-    assert (await content_workbench(db_session, "p1"))["items"][0]["status"] == "stale"
-    with pytest.raises(HTTPException):
-        await export_brief(db_session, grant, plan, run)
+    assert (await content_workbench(db_session, "p1"))["items"][0]["status"] == "ready"
+    assert (await export_brief(db_session, grant, plan, run))["runId"] == run.id
     await db_session.execute(
         delete(IntelligenceRun).where(IntelligenceRun.id == newer.id)
     )
@@ -108,16 +107,16 @@ async def test_new_queued_run_and_missing_state_block_export_without_creating_st
         )
     )
     await db_session.commit()
-    assert (await content_workbench(db_session, "p1"))["items"][0]["status"] == "stale"
+    assert (await content_workbench(db_session, "p1"))["items"][0]["status"] == "ready"
     assert not db_session.new
 
 
 @pytest.mark.asyncio
 async def test_cursor_pages_do_not_skip_or_repeat_equal_timestamp_records(
-    db_session, monkeypatch
+    db_session, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(settings, "intelligence_enabled", True)
-    _, run, plan, _, request = await fixture_draft(db_session)
+    _, run, plan, _, request = await fixture_draft(db_session, tmp_path, monkeypatch)
     await authorize_draft(db_session, plan, run, request, "reviewer")
     moment = utcnow()
     for index in range(31):

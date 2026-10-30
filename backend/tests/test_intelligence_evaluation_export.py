@@ -26,7 +26,7 @@ from tests.test_intelligence_foundation import fixture_audit
 
 async def evaluation_fixture(db, project="p1"):
     audit = await fixture_audit(
-        db, project=project, text="青禾可靠。" + "字" * 3500 + "尾部远岚"
+        db, project=project, text="青禾可靠。" + "字" * 900 + "尾部远岚"
     )
     run = await prepare_run(db, project, audit.id, enrich=False)
     response = run.manifest["responses"][0]
