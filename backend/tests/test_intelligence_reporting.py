@@ -5,7 +5,7 @@ import pytest
 from app.api.auth import get_current_user
 from app.config import settings
 from app.intelligence.ingestion import prepare_run
-from app.intelligence.models import IntelligenceRun
+from app.intelligence.models import AuditIntelligenceState, IntelligenceRun
 from app.intelligence.reporting import audit_report, project_report
 from app.main import app
 from tests.test_intelligence_foundation import fixture_audit
@@ -134,3 +134,86 @@ async def test_saved_run_reports_verified_sources_even_when_context_is_stale(
     assert entity["numerator"] == entity["denominator"] == 1
     assert report["sources"][0]["kind"] == "answer_reference"
     assert "text_key" not in report["sources"][0]
+
+
+@pytest.mark.asyncio
+async def test_latest_report_keeps_large_json_out_of_sort_and_reads_reviews_once(db_session):
+    from sqlalchemy import event
+
+    audit = await fixture_audit(db_session)
+    run = await prepare_run(db_session, "p1", audit.id)
+    run.status = "partial"
+    db_session.add(AuditIntelligenceState(project_id="p1", audit_id=audit.id))
+    await db_session.flush()
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.lower())
+
+    engine = db_session.bind.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        report = await audit_report(db_session, audit, include_measurements=False)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert report["run_id"] == run.id
+    sorted_runs = [sql for sql in statements if "from intelligence_runs" in sql and "order by" in sql]
+    assert sorted_runs
+    assert all("intelligence_runs.manifest" not in sql and "intelligence_runs.summary" not in sql for sql in sorted_runs)
+    assert sum("from intelligence_claim_reviews" in sql for sql in statements) == 1
+    assert not any("from intelligence_brand_facts" in sql for sql in statements)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_matches_report_without_loading_unused_reviews(db_session, monkeypatch):
+    from sqlalchemy import event
+
+    from app.intelligence.dashboard import project_dashboard
+
+    monkeypatch.setattr(settings, "intelligence_enabled", True)
+    audit = await fixture_audit(db_session)
+    run = await prepare_run(db_session, "p1", audit.id)
+    run.status = "partial"
+    db_session.add(AuditIntelligenceState(project_id="p1", audit_id=audit.id))
+    await db_session.flush()
+    full = await audit_report(db_session, audit, include_measurements=False)
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.lower())
+
+    engine = db_session.bind.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        overview = (await project_dashboard(db_session, "p1"))["report"]
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert overview == {key: value for key, value in full.items() if key not in ("sources", "evidence", "responses", "source_states")}
+    assert not any("from intelligence_claim_reviews" in sql or "from intelligence_brand_facts" in sql for sql in statements)
+
+
+@pytest.mark.asyncio
+async def test_capture_poll_does_not_load_analysis_bodies(db_session):
+    from sqlalchemy import event
+
+    from app.api.intelligence import capture_status
+    from app.intelligence.models import SamplingAudit
+
+    audit = await fixture_audit(db_session)
+    run = await prepare_run(db_session, "p1", audit.id)
+    run.status, run.coverage = "partial", {"semantic_error_count": 2}
+    db_session.add(SamplingAudit(project_id="p1", audit_id=audit.id, idempotency_key="capture-poll", request_hash="f" * 64, expected_samples=1))
+    await db_session.flush()
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.lower())
+
+    engine = db_session.bind.sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        status = await capture_status(audit.id, {"scope": "project", "pid": "p1", "role": "viewer"}, db_session)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert status["analysis_status"] == "partial" and status["semantic_error_count"] == 2
+    assert not any("intelligence_runs.manifest" in sql or "intelligence_runs.summary" in sql for sql in statements)

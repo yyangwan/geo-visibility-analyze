@@ -4,7 +4,7 @@ from collections import Counter
 
 from sqlalchemy import select
 
-from app.intelligence.actions import stamp
+from app.intelligence.actions import run_is_current
 from app.intelligence.measurement import run_snapshot
 from app.intelligence.models import AuditIntelligenceState, IntelligenceRun
 from app.intelligence.reviews import review_snapshot
@@ -30,7 +30,7 @@ def metric_population(responses, observed, *, answer=False):
     return included, excluded
 
 
-def project_report(run, snapshot, fresh, reviews):
+def project_report(run, snapshot, fresh, reviews, *, include_details=True):
     entities = run.summary.get("entities", [])
     platforms = []
     for platform in sorted({row["platform"] for row in snapshot["responses"]}):
@@ -64,7 +64,7 @@ def project_report(run, snapshot, fresh, reviews):
         platforms.append(
             {"platform": platform, "samples": len(responses), "metrics": metrics}
         )
-    return {
+    report = {
         "run_id": run.id,
         "revision": run.revision,
         "finished_at": utc_isoformat(run.finished_at),
@@ -76,6 +76,11 @@ def project_report(run, snapshot, fresh, reviews):
         "entities": entities,
         "platforms": platforms,
         "diagnoses": run.summary.get("diagnoses", []),
+    }
+    if not include_details:
+        return report
+    return {
+        **report,
         "evidence": [
             {**item, "human_review": reviews.get(item["id"])}
             for item in run.summary.get("claim_evidence", [])
@@ -112,9 +117,10 @@ def project_report(run, snapshot, fresh, reviews):
     }
 
 
-async def audit_report(db, audit, *, include_measurements=True):
-    run = await db.scalar(
-        select(IntelligenceRun)
+async def audit_report(db, audit, *, include_measurements=True, include_details=True):
+    # Sort only IDs: MySQL otherwise carries multi-MB immutable JSON through filesort.
+    run_id = await db.scalar(
+        select(IntelligenceRun.id)
         .where(
             IntelligenceRun.project_id == audit.project_id,
             IntelligenceRun.audit_id == audit.id,
@@ -129,8 +135,14 @@ async def audit_report(db, audit, *, include_measurements=True):
         "status": "needs_analysis",
         "snapshot_current": False,
     }
-    if run is None:
+    if run_id is None:
         return result
+    run = await db.scalar(
+        select(IntelligenceRun).where(
+            IntelligenceRun.project_id == audit.project_id,
+            IntelligenceRun.id == run_id,
+        )
+    )
     result.update(run_id=run.id, revision=run.revision, status=run.status)
     if run.status not in ("ready", "partial"):
         return result
@@ -140,14 +152,15 @@ async def audit_report(db, audit, *, include_measurements=True):
             AuditIntelligenceState.audit_id == audit.id,
         )
     )
-    fresh = (await stamp(db, run, state))[1] if state is not None else False
+    fresh = await run_is_current(db, run, state) if state is not None else False
     report = {
         **result,
         **project_report(
             run,
             await run_snapshot(db, run),
             fresh,
-            await review_snapshot(db, run.project_id, run.id),
+            await review_snapshot(db, run.project_id, run.id) if include_details else {},
+            include_details=include_details,
         ),
     }
     if include_measurements:

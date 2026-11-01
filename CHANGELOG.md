@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.1.0] - 2026-11-01
+
+### Fixed
+- Read only status and counters for capture polling, and keep large immutable analysis JSON out of latest-revision sorting.
+- Avoid repeated approval-review and fact reads in read-only reports; build the dashboard without discarded evidence details while preserving freshness and metric populations.
+
 ## [1.3.0.0] - 2026-10-30
 
 ### Added

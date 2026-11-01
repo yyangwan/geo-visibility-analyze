@@ -1089,8 +1089,8 @@ async def capture_status(
             AnalysisJob.status.in_(["queued", "leased", "retry_wait"]),
         )
     )
-    latest_run = await db.scalar(
-        select(IntelligenceRun)
+    latest_run_id = await db.scalar(
+        select(IntelligenceRun.id)
         .where(
             IntelligenceRun.project_id == audit.project_id,
             IntelligenceRun.audit_id == audit_id,
@@ -1098,6 +1098,15 @@ async def capture_status(
         .order_by(IntelligenceRun.revision.desc())
         .limit(1)
     )
+    # Polls need only status and counters, never immutable response/source bodies.
+    latest_run = (
+        await db.execute(
+            select(IntelligenceRun.status, IntelligenceRun.coverage).where(
+                IntelligenceRun.project_id == audit.project_id,
+                IntelligenceRun.id == latest_run_id,
+            )
+        )
+    ).one_or_none() if latest_run_id else None
     refresh_job = (
         await db.get(AnalysisJob, state.pending_job_id)
         if state and state.pending_job_id

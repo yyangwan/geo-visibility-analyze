@@ -29,13 +29,8 @@ async def project_dashboard(db, project_id):
     )
     if audit is None:
         return result
-    report = await audit_report(db, audit, include_measurements=False)
-    # Dashboard needs denominators and diagnoses; full evidence stays in the report.
-    overview = {
-        key: value
-        for key, value in report.items()
-        if key not in ("sources", "evidence", "responses", "source_states")
-    }
+    # Keep verified denominators and diagnoses, without building discarded evidence.
+    overview = await audit_report(db, audit, include_measurements=False, include_details=False)
     processing = await audit_processing(db, audit)
     result.update(
         latest_audit={
