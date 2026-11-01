@@ -70,11 +70,8 @@ async def persist_diagnoses(db, run, summary):
         diagnosis["record_id"] = record.id
 
 
-async def stamp(db, run, state):
-    from app.intelligence.reviews import fact_snapshot, review_snapshot
-
-    reviews = await review_snapshot(db, run.project_id, run.id)
-    facts = await fact_snapshot(db, run.project_id)
+async def _freshness_context(db, run, state):
+    """Read the dependencies shared by report freshness and approval stamps."""
     _, base_url, model = settings.get_analysis_llm_config()
     current_signature = analysis_signature(model, base_url)
     newest = await db.scalar(
@@ -103,6 +100,20 @@ async def stamp(db, run, state):
     fresh = fresh and await alias_snapshot(db, run.project_id) == run.manifest.get(
         "entity_aliases", {}
     )
+    return fresh, current_signature, newest, identities
+
+
+async def run_is_current(db, run, state):
+    # Read-only reports need freshness, not the approval's fact/review digest.
+    return (await _freshness_context(db, run, state))[0]
+
+
+async def stamp(db, run, state):
+    from app.intelligence.reviews import fact_snapshot, review_snapshot
+
+    reviews = await review_snapshot(db, run.project_id, run.id)
+    facts = await fact_snapshot(db, run.project_id)
+    fresh, current_signature, newest, identities = await _freshness_context(db, run, state)
     value = stable_hash(
         [
             run.id,
