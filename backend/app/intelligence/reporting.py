@@ -117,7 +117,7 @@ def project_report(run, snapshot, fresh, reviews, *, include_details=True):
     }
 
 
-async def audit_report(db, audit, *, include_measurements=True, include_details=True):
+async def audit_report(db, audit, *, include_measurements=True, include_details=True, collection=False):
     # Sort only IDs: MySQL otherwise carries multi-MB immutable JSON through filesort.
     run_id = await db.scalar(
         select(IntelligenceRun.id)
@@ -153,6 +153,29 @@ async def audit_report(db, audit, *, include_measurements=True, include_details=
         )
     )
     fresh = await run_is_current(db, run, state) if state is not None else False
+    if collection:
+        # The capture page needs counters and selector options, not scoring matrices,
+        # diagnoses, source evidence or the expensive verified metric populations.
+        targets = (run.summary.get("brand_presence") or {}).get("targets")
+        if targets is None:
+            targets = [{**row, "target_id": "entity:" + row["id"]} for row in run.summary.get("entities", [])]
+        return {
+            **result,
+            "status": run.status if fresh else "stale",
+            "snapshot_current": fresh,
+            "finished_at": utc_isoformat(run.finished_at),
+            "coverage": {key: value for key, value in (run.coverage or {}).items() if key in {
+                "total_segments", "segment_states", "total_characters", "analyzed_characters",
+                "responses", "failed_responses", "sources", "captured_sources", "complete", "semantic_error_count",
+            }},
+            "analysis_scope": {
+                "id": run.id, "audit_id": str(run.audit_id), "revision": run.revision,
+                "targets": [{key: row[key] for key in ("target_id", "name", "role", "identity_status")} for row in targets],
+                "platforms": list(dict.fromkeys(row["platform"] for row in [
+                    *run.manifest.get("responses", []), *run.summary.get("platforms", []),
+                ])),
+            },
+        }
     report = {
         **result,
         **project_report(

@@ -38,13 +38,14 @@ from app.intelligence.project_context import (
 @router.get("/projects/{project_id}/dashboard")
 async def intelligence_dashboard(
     project_id: str,
+    view: str = Query("overview", pattern=r"^(overview|collection)$"),
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     from app.intelligence.dashboard import project_dashboard
 
     require_project_scope(user, project_id)
-    return await project_dashboard(db, project_id)
+    return await project_dashboard(db, project_id, collection=view == "collection")
 
 
 @router.get("/projects/{project_id}/workspace")

@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.2.0] - 2026-11-02
+
+### Fixed
+- Add an explicit capture-dashboard projection with compact counters and frozen brand/platform options; skip full evidence metrics and retain revision freshness and project scoping.
+
 ## [1.3.1.0] - 2026-11-01
 
 ### Fixed

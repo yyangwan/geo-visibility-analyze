@@ -9,7 +9,7 @@ from app.models.models import Audit
 from app.utils.timezone import utc_isoformat, utcnow
 
 
-async def project_dashboard(db, project_id):
+async def project_dashboard(db, project_id, *, collection=False):
     result = {
         "schema": "citation-dashboard-1",
         "project_id": project_id,
@@ -30,7 +30,7 @@ async def project_dashboard(db, project_id):
     if audit is None:
         return result
     # Keep verified denominators and diagnoses, without building discarded evidence.
-    overview = await audit_report(db, audit, include_measurements=False, include_details=False)
+    overview = await audit_report(db, audit, include_measurements=False, include_details=False, collection=collection)
     processing = await audit_processing(db, audit)
     result.update(
         latest_audit={
