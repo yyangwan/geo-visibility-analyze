@@ -17,6 +17,7 @@ from app.api.schedules import router as schedules_router
 from app.api.strategic import router as strategic_router
 from app.api.suggestions import router as suggestions_router
 from app.api.trends import router as trends_router
+from app.api.website_quick_check import router as website_quick_check_router
 from app.config import settings
 from app.logging_config import get_logger, setup_logging
 from app.middleware import RequestLoggingMiddleware
@@ -45,6 +46,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(platforms_router, prefix="/api/platforms", tags=["platforms"])
 app.include_router(product_website_router, prefix="/api/product-website", tags=["product-website"])
+app.include_router(website_quick_check_router, prefix="/api/internal/website-quick-check")
 app.include_router(prompts_router, prefix="/api/prompts", tags=["prompts"])
 app.include_router(audits_router, prefix="/api/audits", tags=["audits"])
 app.include_router(analysis_router, prefix="/api/analysis", tags=["analysis"])

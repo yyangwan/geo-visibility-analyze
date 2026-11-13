@@ -82,6 +82,7 @@ class CapturedSource:
     text: str
     completeness: str
     extractor_version: str = "html-visible-v1"
+    encoding: str = "utf-8"
 
 
 class VisibleText(HTMLParser):
@@ -127,10 +128,18 @@ class VisibleText(HTMLParser):
         )
 
 
-async def capture_source(url: str, byte_limit: int = 4 * 1024 * 1024) -> CapturedSource:
-    async with asyncio.timeout(30):
+async def capture_source(
+    url: str,
+    byte_limit: int = 4 * 1024 * 1024,
+    *,
+    timeout_seconds: int = 30,
+    max_redirects: int = 5,
+    html_only: bool = False,
+    user_agent: str = "GenilinkCitationBot/1.0",
+) -> CapturedSource:
+    async with asyncio.timeout(timeout_seconds):
         current = normalized_url(url)
-        for _ in range(6):
+        for _ in range(max_redirects + 1):
             parsed = urlsplit(current)
             addresses = await resolve_public(
                 parsed.hostname, 443 if parsed.scheme == "https" else 80
@@ -144,7 +153,7 @@ async def capture_source(url: str, byte_limit: int = 4 * 1024 * 1024) -> Capture
                 timeout=10,
                 headers={
                     "Accept-Encoding": "identity",
-                    "User-Agent": "GenilinkCitationBot/1.0",
+                    "User-Agent": user_agent,
                 },
             ) as client:
                 async with client.stream("GET", current) as response:
@@ -171,7 +180,10 @@ async def capture_source(url: str, byte_limit: int = 4 * 1024 * 1024) -> Capture
                         .strip()
                         .lower()
                     )
-                    if mime not in ("text/html", "application/xhtml+xml", "text/plain"):
+                    supported_types = ("text/html", "application/xhtml+xml")
+                    if not html_only:
+                        supported_types += ("text/plain",)
+                    if mime not in supported_types:
                         raise SourceUnavailable("unsupported_format", 200)
                     if response.headers.get(
                         "content-encoding", "identity"
@@ -187,8 +199,10 @@ async def capture_source(url: str, byte_limit: int = 4 * 1024 * 1024) -> Capture
                     parser = VisibleText()
                     parser.feed(decoded)
                     text = decoded.strip() if mime == "text/plain" else parser.text()
-                    if not text:
+                    if not text and not html_only:
                         raise SourceUnavailable("empty_content", 200)
                     # A successful HTTP request does not prove full article coverage.
-                    return CapturedSource(current, 200, raw, text, "unknown")
+                    return CapturedSource(
+                        current, 200, raw, text, "unknown", encoding=response.encoding or "utf-8"
+                    )
         raise SourceUnavailable("redirect_limit")

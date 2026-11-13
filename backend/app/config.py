@@ -84,6 +84,7 @@ class Settings(BaseSettings):
 
     # Product website crawler settings
     product_website_crawler_provider: str = "native"
+    website_quick_check_service_secret: str = ""
     product_website_crawler_timeout_seconds: int = 30
     firecrawl_api_key: str = ""
     firecrawl_base_url: str = "https://api.firecrawl.dev"
