@@ -20,6 +20,15 @@ jobs:
         options: >-
           --health-cmd="mysqladmin ping -h localhost -pci-password"
           --health-interval=10s --health-timeout=5s --health-retries=10
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: analysis_pg_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d analysis_pg_ci"
+          --health-interval=5s --health-timeout=5s --health-retries=10
     defaults:
       run:
         working-directory: backend
@@ -41,6 +50,13 @@ jobs:
       - run: ruff check app/intelligence app/api/intelligence.py app/api/intelligence_owned.py scripts/check_intelligence_image.py scripts/check_intelligence_deployment.py scripts/initialize_value_database.py scripts/check_value_database.py scripts/freeze_schema.py tests/test_intelligence*.py --ignore B008,SIM117,BLE001
       - name: Initialize reviewed fresh schema
         run: python -m scripts.initialize_value_database --expected-database intelligence_ci
+      - name: Verify PostgreSQL baseline and lease timing
+        env:
+          AISCOPE_DATABASE_URL: postgresql+psycopg://postgres:ci-password@127.0.0.1:5432/analysis_pg_ci
+        run: |
+          python -m scripts.initialize_value_database --expected-database analysis_pg_ci
+          python -m scripts.initialize_value_database --expected-database analysis_pg_ci
+          python -m scripts.check_postgresql_runtime
       - name: Fresh database constraints and API/worker startup
         env:
           AISCOPE_INTELLIGENCE_ENABLED: '1'

@@ -12,8 +12,12 @@ class SchemaLockUnavailable(RuntimeError):
 
 @contextmanager
 def schema_lock(connection, timeout=60):
+    if connection.dialect.name == "postgresql":
+        with postgres_schema_lock(connection, timeout):
+            yield
+        return
     if connection.dialect.name != "mysql":
-        raise SchemaLockUnavailable("Schema mutex requires MySQL")
+        raise SchemaLockUnavailable("Unsupported database for schema mutex")
     if connection.in_transaction():
         raise SchemaLockUnavailable("Schema mutex requires a fresh connection")
     acquired = False
@@ -57,5 +61,38 @@ def schema_lock(connection, timeout=60):
         except Exception:
             # Closing the connection releases a named lock even after connection
             # failure. Never return an uncertain lock to a pool.
+            connection.invalidate()
+            raise SchemaLockUnavailable("Schema mutex cleanup failed") from None
+
+
+@contextmanager
+def postgres_schema_lock(connection, timeout):
+    from time import monotonic, sleep
+
+    if connection.in_transaction():
+        raise SchemaLockUnavailable("Schema mutex requires a fresh connection")
+    # Advisory locks are scoped to the current PostgreSQL database.
+    key = int.from_bytes(sha256(b"citation-schema").digest()[:8], "big", signed=True)
+    limit = monotonic() + timeout
+    acquired = False
+    try:
+        while True:
+            acquired = connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
+            connection.commit()
+            if acquired:
+                break
+            if monotonic() >= limit:
+                raise SchemaLockUnavailable("Schema mutex is busy or unavailable")
+            sleep(min(0.1, max(0, limit - monotonic())))
+        yield
+    finally:
+        try:
+            connection.rollback()
+            if acquired:
+                released = connection.scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                connection.commit()
+                if not released:
+                    raise SchemaLockUnavailable("Schema mutex release was not confirmed")
+        except Exception:
             connection.invalidate()
             raise SchemaLockUnavailable("Schema mutex cleanup failed") from None

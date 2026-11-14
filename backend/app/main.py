@@ -94,9 +94,10 @@ def _check_schema_revision():
     from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine
 
-    db_url = settings.database_url.replace("+aiomysql", "+pymysql")
+    from app.database import sync_database_url
+
+    db_url = sync_database_url()
     alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
 
     engine = create_engine(db_url)
     script = ScriptDirectory.from_config(alembic_cfg)

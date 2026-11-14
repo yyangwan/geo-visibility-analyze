@@ -6,6 +6,11 @@ on:
         description: Full current main SHA with a successful Backend source and worker publication
         required: true
         type: string
+      fresh_host:
+        description: Initialize a host that has no active analysis release
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -59,6 +64,7 @@ jobs:
           RELEASE_SHA: ${{ inputs.release_sha }}
           STORAGE_HOST: ${{ secrets.CITATION_STORAGE_HOST }}
           STORAGE_USER: ${{ secrets.CITATION_STORAGE_USER }}
+          FRESH_HOST: ${{ inputs.fresh_host && '1' || '0' }}
         run: |
           set -euo pipefail
           [[ "$STORAGE_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
@@ -73,7 +79,7 @@ jobs:
           docker pull "$IMAGE"
           test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$RELEASE_SHA"
           docker save "$IMAGE" | gzip -1 | ssh "${SSH[@]}" "$TARGET" "bash -o pipefail -c 'gzip -d | docker load'"
-          ssh "${SSH[@]}" "$TARGET" "bash -s -- $RELEASE_SHA" <<'REMOTE'
+          ssh "${SSH[@]}" "$TARGET" "bash -s -- $RELEASE_SHA $FRESH_HOST" <<'REMOTE'
           set -euo pipefail
           SHA="$1"
           [[ "$SHA" =~ ^[a-f0-9]{40}$ ]]
@@ -83,7 +89,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$SHA"
           git pull --ff-only origin main
           test "$(git rev-parse HEAD)" = "$SHA"
-          bash deploy/deploy-intelligence.sh deploy "$SHA"
+          INTELLIGENCE_FRESH_HOST="$2" bash deploy/deploy-intelligence.sh deploy "$SHA"
           REMOTE
       - name: Remove ephemeral runner credentials
         if: always()

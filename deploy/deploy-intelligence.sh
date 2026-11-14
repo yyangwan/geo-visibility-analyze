@@ -5,7 +5,6 @@ ROOT=/opt/geo-visibility-analyze
 STATE=/opt/geo-visibility-deploy/intelligence
 LEGACY_ENV=/opt/geo-visibility-analyze/.intelligence.env
 VALUE_ENV=/opt/geo-visibility-analyze/.intelligence-value.env
-VALUE_DATABASE=intelligence_value_20261030
 UPSTREAM=/etc/nginx/conf.d/genilink-intelligence-upstream.inc
 NGINX_CONF=/etc/nginx/conf.d/genilink-intelligence.conf
 IMAGE_ROOT=ghcr.io/yyangwan/geo-visibility-analyze
@@ -33,7 +32,9 @@ legacy_ready() {
     [[ "$(docker inspect --format '{{.Image}}' "$LEGACY_CONTAINER")" == "$1" ]] && \
     http_ok http://127.0.0.1:8000/api/health
 }
-if [[ -z "$ACTIVE" ]]; then
+if [[ -z "$ACTIVE" && "${INTELLIGENCE_FRESH_HOST:-0}" == 1 && "$MODE" == deploy ]]; then
+  ACTIVE=fresh
+elif [[ -z "$ACTIVE" ]]; then
   # Record a verified initial rollback target without starting/stopping legacy.
   ACTIVE_IMAGE=$(docker inspect --format '{{.Image}}' "$LEGACY_CONTAINER")
   [[ "$ACTIVE_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
@@ -63,7 +64,7 @@ fi
 if [[ "$ACTIVE" == legacy ]]; then
   [[ "$ACTIVE_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
   legacy_ready "$ACTIVE_IMAGE"
-else
+elif [[ "$ACTIVE" != fresh ]]; then
   [[ "$ACTIVE_IMAGE" =~ ^ghcr.io/yyangwan/geo-visibility-analyze:[a-f0-9]{40}$ ]]
 fi
 if [[ "$SLOT" != legacy ]]; then
@@ -92,7 +93,9 @@ if [[ "$SLOT" != legacy ]]; then
   # This effective-settings check happens inside exactly the image being migrated.
   compose "$SLOT" "$IMAGE" "$ENV_FILE" run --rm --no-deps migrate python -m scripts.check_intelligence_deployment validate
   if [[ "$MODE" == deploy ]]; then
-    compose "$SLOT" "$IMAGE" "$ENV_FILE" run --rm --no-deps migrate python -m scripts.initialize_value_database --expected-database "$VALUE_DATABASE"
+  value_database=$(compose "$SLOT" "$IMAGE" "$ENV_FILE" run --rm --no-deps -T migrate python -m scripts.check_intelligence_deployment database)
+    [[ "$value_database" == intelligence_value_20261030 || "$value_database" == genilink_analysis ]]
+    compose "$SLOT" "$IMAGE" "$ENV_FILE" run --rm --no-deps migrate python -m scripts.initialize_value_database --expected-database "$value_database"
   fi
 fi
 BACKUP=$(mktemp -d "$STATE/attempt.XXXXXXXX")
@@ -219,5 +222,5 @@ record_switch
 COMMITTED=1
 # Stop only the preceding dedicated intelligence slot after both probes passed.
 # Never touch the separate legacy geo-visibility-analyze-backend-1 container.
-if [[ "$ACTIVE" != legacy ]]; then compose "$ACTIVE" "$ACTIVE_IMAGE" "$ACTIVE_ENV" stop worker api; fi
+if [[ "$ACTIVE" == blue || "$ACTIVE" == green ]]; then compose "$ACTIVE" "$ACTIVE_IMAGE" "$ACTIVE_ENV" stop worker api; fi
 printf 'Intelligence active: %s %s, previous slot retained for rollback\n' "$SLOT" "$SHA"

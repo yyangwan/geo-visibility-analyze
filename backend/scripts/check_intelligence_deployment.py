@@ -16,24 +16,33 @@ def guarded_database_url():
     from app.config import settings
 
     url = make_url(settings.database_url)
-    if url.drivername != "mysql+aiomysql" or url.database != "intelligence_value_20261030":
-        raise RuntimeError("Refusing a database outside intelligence_value_20261030")
+    targets = {
+        "mysql+aiomysql": "intelligence_value_20261030",
+        "postgresql+psycopg": "genilink_analysis",
+    }
+    if not url.database or url.database != targets.get(url.drivername):
+        raise RuntimeError("Refusing an undesignated analysis database")
     if os.getenv("AISCOPE_DEBUG") != "0":
         raise RuntimeError("Production requires explicit AISCOPE_DEBUG=0")
     if not settings.intelligence_enabled:
         raise RuntimeError("Production intelligence must be explicitly enabled")
     if settings.intelligence_environment != "production" or settings.intelligence_blob_backend != "oss":
         raise RuntimeError("Production requires the OSS storage adapter")
-    return url.set(drivername="mysql+pymysql")
+    return url.set(drivername="mysql+pymysql") if url.get_backend_name() == "mysql" else url
 
 
 def worker_ready(connection, since, worker_id):
     if not isinstance(worker_id, str) or not re.fullmatch(r"[a-f0-9]{32}", worker_id):
         raise ValueError("Candidate worker identity is required")
-    return bool(connection.execute(text("""
+    freshness = (
+        "clock_timestamp() - INTERVAL '45 seconds'"
+        if connection.dialect.name == "postgresql"
+        else "CURRENT_TIMESTAMP - INTERVAL 45 SECOND"
+    )
+    return bool(connection.execute(text(f"""
         SELECT COUNT(*) FROM intelligence_worker_heartbeats
         WHERE id = :worker_id AND started_at > :since
-          AND last_seen_at >= CURRENT_TIMESTAMP - INTERVAL 45 SECOND
+          AND last_seen_at >= {freshness}
           AND state IN ('idle', 'working')
           AND storage_status = 'configuration_verified'
           AND disk_status = 'ok'
@@ -43,7 +52,7 @@ def worker_ready(connection, since, worker_id):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["validate", "watermark", "worker", "health"])
+    parser.add_argument("mode", choices=["validate", "database", "watermark", "worker", "health"])
     parser.add_argument("--since")
     parser.add_argument("--worker-id")
     args = parser.parse_args()
@@ -57,10 +66,18 @@ def main():
         print("health_verified")
         return
     url = guarded_database_url()
+    if args.mode == "database":
+        print(url.database)
+        return
     if args.mode == "validate":
         print("production_database_guard_verified")
         return
-    engine = create_engine(url, connect_args={"connect_timeout": 5, "init_command": "SET time_zone = '+00:00'"})
+    timezone_arg = (
+        {"options": "-c timezone=UTC"}
+        if url.get_backend_name() == "postgresql"
+        else {"init_command": "SET time_zone = '+00:00'"}
+    )
+    engine = create_engine(url, connect_args={"connect_timeout": 5, **timezone_arg})
     try:
         with engine.connect() as connection:
             if args.mode == "watermark":

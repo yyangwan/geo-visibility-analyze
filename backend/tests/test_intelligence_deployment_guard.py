@@ -30,12 +30,13 @@ def test_worker_identity_defaults_are_unique_and_candidate_can_be_explicit():
     "mysql+aiomysql://user:pass@mysql/intelligence_production",
     "mysql+aiomysql://user:pass@mysql/intelligence_production_suffix",
     "sqlite:///intelligence_production",
+    "postgresql+psycopg://user:pass@db/portal",
 ])
 def test_guard_rejects_any_database_other_than_exact_new_production_schema(monkeypatch, url):
     from app.config import settings
 
     monkeypatch.setattr(settings, "database_url", url)
-    with pytest.raises(RuntimeError, match="outside intelligence_value_20261030"):
+    with pytest.raises(RuntimeError, match="undesig.* analysis database"):
         guarded_database_url()
 
 

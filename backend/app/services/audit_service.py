@@ -1008,7 +1008,34 @@ async def _upsert_source_citations(
     platform: str,
     sources: list,
 ) -> None:
-    """Upsert SourceCitation rows using INSERT ON DUPLICATE KEY UPDATE."""
+    """Atomically accumulate citation counts and append URL arrays."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB, insert
+
+        table = SourceCitation.__table__
+        for source in sources:
+            statement = insert(table).values(
+                project_id=project_id,
+                audit_id=audit_id,
+                domain=source.domain,
+                urls=source.urls or [],
+                citation_count=1,
+                platform=platform,
+                created_at=func.now(),
+            )
+            await db.execute(
+                statement.on_conflict_do_update(
+                    index_elements=["project_id", "audit_id", "domain", "platform"],
+                    set_={
+                        "citation_count": table.c.citation_count + 1,
+                        "urls": cast(table.c.urls, JSONB).op("||")(
+                            cast(statement.excluded.urls, JSONB)
+                        ),
+                    },
+                )
+            )
+        return
     for source in sources:
         urls_json = source.urls if source.urls else []
 

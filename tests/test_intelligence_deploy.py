@@ -65,6 +65,7 @@ docker() {
   if [[ "$*" == 'image inspect '* ]]; then printf '%s\n' "$SHA"; return; fi
   if [[ "$*" == 'network inspect '* ]]; then return 0; fi
   if [[ "$*" == *'check_intelligence_deployment validate' ]]; then [[ "$FAILURE" != guard ]]; return; fi
+  if [[ "$*" == *'check_intelligence_deployment database' ]]; then printf 'intelligence_value_20261030\n'; return; fi
   if [[ "$*" == *'scripts.initialize_value_database'* ]]; then [[ "$FAILURE" != migration ]]; return; fi
   if [[ "$*" == *'ps -q api' ]]; then printf 'candidate-api\n'; return; fi
   if [[ "$*" == *'ps -q worker' ]]; then printf 'candidate-worker\n'; return; fi
