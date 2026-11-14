@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
@@ -29,7 +29,15 @@ class Lease:
 
 
 async def db_now(db: AsyncSession) -> datetime:
-    value = await db.scalar(select(func.current_timestamp()))
+    # PostgreSQL CURRENT_TIMESTAMP is frozen at the start of the transaction.
+    clock = (
+        func.clock_timestamp()
+        if db.get_bind().dialect.name == "postgresql"
+        else func.current_timestamp()
+    )
+    value = await db.scalar(select(clock))
+    if value.tzinfo is not None:
+        value = value.astimezone(UTC)
     return value.replace(tzinfo=None)
 
 

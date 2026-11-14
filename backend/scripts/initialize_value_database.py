@@ -1,4 +1,4 @@
-"""Initialize an explicitly named empty MySQL DB; never drop, move or upgrade data."""
+"""Initialize an explicitly named empty analysis database."""
 
 import argparse
 import json
@@ -7,21 +7,19 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
-from sqlalchemy.engine import make_url
 
 from alembic import command
 from app.config import settings
-from app.database import Base
+from app.database import Base, sync_database_url
 from app.intelligence import models as intelligence_models  # noqa: F401
 from app.intelligence.schema_version import SCHEMA_REVISION
 from app.models import device_gateway, models  # noqa: F401
 
 
 def initialize(expected_database):
-    configured = make_url(settings.database_url)
-    if not configured.drivername.startswith("mysql"):
-        raise ValueError("This initializer supports the audit service MySQL database")
-    url = configured.set(drivername="mysql+pymysql")
+    url = sync_database_url(settings.database_url)
+    if url.drivername not in {"mysql+pymysql", "postgresql+psycopg"}:
+        raise ValueError("Unsupported analysis database driver")
     if url.database != expected_database or not expected_database:
         raise ValueError(
             "Configured database does not match the explicitly named target"
