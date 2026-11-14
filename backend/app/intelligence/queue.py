@@ -2,7 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
@@ -37,7 +37,7 @@ async def db_now(db: AsyncSession) -> datetime:
     )
     value = await db.scalar(select(clock))
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc)
+        value = value.astimezone(UTC)
     return value.replace(tzinfo=None)
 
 
