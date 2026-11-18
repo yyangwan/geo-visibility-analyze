@@ -12,9 +12,9 @@ from app.intelligence.models import (
     AuditSample,
     CapturedResponse,
     CitationObservation,
+    IntelligenceRun,
     SourceFetch,
     SourceSnapshot,
-    IntelligenceRun,
 )
 from app.intelligence.queue import db_now
 from app.intelligence.semantics import stable_hash
