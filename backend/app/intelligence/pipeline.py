@@ -237,6 +237,9 @@ class Pipeline:
                 raw_blob=raw_blob,
                 quality=quality,
             ):
+                from app.intelligence.visibility_flow import source_publication_time
+
+                published_at = await source_publication_time(db, lease.project_id, audit_id)
                 # The document lock serializes shared-snapshot insertion across audits.
                 await db.scalar(
                     select(SourceDocument)
@@ -274,6 +277,7 @@ class Pipeline:
                         project_id=lease.project_id,
                         document_id=document_id,
                         snapshot_id=snapshot.id,
+                        created_at=published_at or utcnow(),
                         final_url=captured.final_url,
                         status="captured",
                         http_status=captured.status,
@@ -1044,6 +1048,10 @@ async def build_summary(db, run):
         summary["brand_signals"],
         summary["brand_evaluation"],
     )
+    if manifest.get("visibility_score_scope"):
+        from app.intelligence.visibility_scoring import build_visibility_score
+
+        summary["visibility_score"] = build_visibility_score(manifest, applications, summary)
     summary["diagnoses"] = diagnoses + platform_diagnoses(run, summary)
     from app.intelligence.opportunities import build_opportunities
 

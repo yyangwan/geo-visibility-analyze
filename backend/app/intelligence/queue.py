@@ -159,6 +159,8 @@ class JobQueue:
             )
             if job is None or job.lease_until <= await db_now(db):
                 raise LeaseLost("Stale worker cannot fail a job")
+            if job.payload.get("visibility_attempt"):
+                retry = False
             job.status = (
                 "retry_wait" if retry and job.attempt < job.max_attempts else "failed"
             )
@@ -196,8 +198,14 @@ class JobQueue:
                 )
             ).all()
             for job in jobs:
+                uncertain_model_dispatch = bool(
+                    job.payload.get("visibility_attempt")
+                    and job.payload.get("model_budget", {}).get("receipts")
+                )
                 job.status = (
-                    "retry_wait" if job.attempt < job.max_attempts else "failed"
+                    "retry_wait"
+                    if job.attempt < job.max_attempts and not uncertain_model_dispatch
+                    else "failed"
                 )
                 job.error_code, job.lease_until, job.available_at = (
                     "lease_expired",

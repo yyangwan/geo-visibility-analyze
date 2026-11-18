@@ -145,10 +145,13 @@ class SamplingRequest(StrictFact):
     rounds: int = Field(default=1, ge=1, le=10)
     surface: Literal["web", "app", "managed_v1"] = "app"
     conditions: CaptureConditions = Field(default_factory=CaptureConditions)
+    processing_mode: Literal["v4"] | None = Field(default=None, alias="processingMode")
     idempotency_key: str = Field(alias="idempotencyKey", min_length=8, max_length=100)
 
     @model_validator(mode="after")
     def unique_inputs(self):
+        if self.processing_mode == "v4" and self.rounds != 1:
+            raise ValueError("Visibility v4 uses exactly one capture round")
         if len(set(self.prompt_ids)) != len(self.prompt_ids) or len(
             set(self.platforms)
         ) != len(self.platforms):
@@ -172,6 +175,10 @@ class BrandSnapshot(StrictFact):
 class SamplingStart(StrictFact):
     sampling: SamplingRequest
     brands: list[BrandSnapshot] = Field(default_factory=list, max_length=100)
+
+
+class AnalysisRetry(StrictFact):
+    failed_attempt_id: str = Field(alias="failedAttemptId", pattern=r"^[a-f0-9]{32}$")
 
 
 class SourceRetry(StrictFact):

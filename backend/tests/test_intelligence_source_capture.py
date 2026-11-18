@@ -53,6 +53,7 @@ async def test_html_capture_preserves_raw_unicode_and_extracts_visible_text(
     capture_http, mime
 ):
     raw = (
+        "<head><title>document title</title></head>"
         "<header>hidden header</header><script>hidden script</script>"
         "<style>hidden style</style><nav>hidden nav</nav>"
         "<article><h1>正文 &amp; 标题</h1><p>第一段  内容</p>"
@@ -71,9 +72,29 @@ async def test_html_capture_preserves_raw_unicode_and_extracts_visible_text(
     assert captured.text == "正文 & 标题\n第一段 内容\n最后一段"
     assert captured.final_url == "https://example.com/article"
     assert captured.status == 200 and captured.completeness == "unknown"
+    assert captured.extractor_version == "html-visible-v2"
     assert resolved == [("example.com", 443)]
     assert requests[0].headers["Accept-Encoding"] == "identity"
     assert stream.closed
+
+
+@pytest.mark.asyncio
+async def test_title_only_app_shell_is_not_archived_as_article_body(capture_http):
+    raw = (
+        b"<head><title>Site title</title></head><body><script>render()</script></body>"
+    )
+    capture_http(
+        lambda _: httpx.Response(
+            200, headers={"Content-Type": "text/html"}, stream=BodyStream(raw)
+        )
+    )
+
+    with pytest.raises(sources.SourceUnavailable) as error:
+        await sources.capture_source("https://example.com/article")
+
+    assert error.value.code == "empty_content"
+    homepage = await sources.capture_source("https://example.com/", html_only=True)
+    assert homepage.raw == raw and homepage.text == ""
 
 
 @pytest.mark.asyncio

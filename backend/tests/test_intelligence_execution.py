@@ -15,6 +15,7 @@ from app.intelligence.execution import (
 from app.intelligence.models import ActionExecution, ActionExecutionEvent
 from app.intelligence.project_context import ContextRequest, receive_context
 from app.intelligence.semantics import stable_hash
+from app.intelligence.workbench import project_execution_counts
 from tests.test_intelligence_action_revisions import (
     approval_request,
     revision_request,
@@ -186,8 +187,12 @@ async def test_revision_change_preserves_old_delivery_but_starts_fresh(db_sessio
     _, action, _ = await arranged(db_session)
     start = command("start", 1)
     await change(db_session, action, start)
+    assert (await project_execution_counts(db_session, "p1"))["in_progress"] == 1
+    assert (await project_execution_counts(db_session, "other-project"))["total"] == 0
     await revise_plan(db_session, action, revision_request(), "owner")
     await db_session.commit()
+    counts = await project_execution_counts(db_session, "p1")
+    assert counts["not_started"] == counts["total"] == 1 and counts["in_progress"] == 0
     new = await read_execution(db_session, action, 2)
     assert (
         new["version"] == 0

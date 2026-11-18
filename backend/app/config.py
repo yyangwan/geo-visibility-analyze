@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     intelligence_model_token_limit: int = Field(default=10_000_000, ge=0, le=100_000_000)
     intelligence_source_byte_limit: int = 4 * 1024 * 1024
     intelligence_refresh_debounce_seconds: int = 60
+    intelligence_visibility_archive_seconds: int = 120
     intelligence_auto_refresh_limit: int = 3
 
     # Product website crawler settings

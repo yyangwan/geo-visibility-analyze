@@ -77,6 +77,14 @@ def project_report(run, snapshot, fresh, reviews, *, include_details=True):
         "platforms": platforms,
         "diagnoses": run.summary.get("diagnoses", []),
     }
+    if run.summary.get("visibility_score"):
+        from app.intelligence.visibility_scoring import score_projection
+
+        report["visibility_score"] = score_projection(
+            run.summary["visibility_score"], opportunities=(
+                run.summary.get("opportunities") or {}
+            ).get("items", []),
+        )
     if not include_details:
         return report
     return {
