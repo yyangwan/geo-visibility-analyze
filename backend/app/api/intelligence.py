@@ -1,8 +1,9 @@
 """Project-scoped immutable analysis views; no blobs/keys or raw HTML exposed."""
 
+from collections import Counter
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +11,14 @@ from app.api.access import get_audit_for_project, require_project_scope
 from app.api.auth import get_current_user
 from app.config import settings
 from app.database import get_db
-from app.intelligence.capture_contract import SamplingStart, SourceRetry
+from app.intelligence.capture_contract import AnalysisRetry, SamplingStart, SourceRetry
+from app.intelligence.capture_records import (
+    CaptureState,
+    capture_record,
+    capture_source_text,
+    list_capture_records,
+    sample_state,
+)
 from app.intelligence.ingestion import prepare_run
 from app.intelligence.models import (
     AnalysisJob,
@@ -46,6 +54,49 @@ async def intelligence_dashboard(
 
     require_project_scope(user, project_id)
     return await project_dashboard(db, project_id, collection=view == "collection")
+
+
+@router.get("/projects/{project_id}/workbench-audit")
+async def workbench_audit(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.workbench import latest_published_score
+    from app.models.models import Audit
+
+    require_project_scope(user, project_id)
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    latest = await db.scalar(
+        select(Audit)
+        .where(Audit.project_id == project_id)
+        .order_by(Audit.created_at.desc(), Audit.id.desc())
+        .limit(1)
+    )
+    capture = None
+    if latest is not None:
+        capture = await audit_capture_view(db, latest, summary_only=True, allow_missing=True)
+    return {
+        "project_id": project_id,
+        "latest_audit_id": str(latest.id) if latest else None,
+        "capture": capture,
+        "report": await latest_published_score(db, project_id) if latest else None,
+    }
+
+
+@router.get("/projects/{project_id}/workbench-execution")
+async def workbench_execution(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.workbench import project_execution_counts
+
+    require_project_scope(user, project_id)
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    return await project_execution_counts(db, project_id)
 
 
 @router.get("/projects/{project_id}/workspace")
@@ -1039,8 +1090,14 @@ async def capture_status(
     audit_id: int,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    summary_only: bool = False,
 ):
     audit = await get_audit_for_project(db, user, audit_id)
+    return await audit_capture_view(db, audit, summary_only=summary_only)
+
+
+async def audit_capture_view(db, audit, *, summary_only, allow_missing=False):
+    audit_id = audit.id
     config = await db.scalar(
         select(SamplingAudit).where(
             SamplingAudit.project_id == audit.project_id,
@@ -1048,23 +1105,40 @@ async def capture_status(
         )
     )
     if config is None:
+        if allow_missing:
+            return None
         raise HTTPException(404, "Sampling audit not found")
     samples = (
-        await db.scalars(
-            select(AuditSample).where(
+        await db.execute(
+            select(
+                AuditSample.id,
+                AuditSample.platform,
+                AuditSample.sample_index,
+                AuditSample.prompt_version_id,
+                AuditSample.status,
+            ).where(
                 AuditSample.project_id == audit.project_id,
                 AuditSample.audit_id == audit_id,
             )
         )
     ).all()
-    attempts = (
-        await db.scalars(
-            select(CaptureAttempt).where(
-                CaptureAttempt.project_id == audit.project_id,
-                CaptureAttempt.sample_id.in_([sample.id for sample in samples]),
+    attempts = Counter()
+    if not summary_only and samples:
+        attempts.update(
+            await db.scalars(
+                select(CaptureAttempt.sample_id).where(
+                    CaptureAttempt.project_id == audit.project_id,
+                    CaptureAttempt.sample_id.in_([sample.id for sample in samples]),
+                )
             )
         )
-    ).all()
+    platforms = {}
+    for sample in samples:
+        counts = platforms.setdefault(
+            sample.platform, {"planned": 0, "received": 0, "failed": 0, "pending": 0}
+        )
+        counts["planned"] += 1
+        counts[sample_state(sample)] += 1
     state = await db.scalar(
         select(AuditIntelligenceState).where(
             AuditIntelligenceState.project_id == audit.project_id,
@@ -1140,8 +1214,16 @@ async def capture_status(
             CitationObservation.url_resolution != "exact",
         )
     )
+    from app.intelligence.visibility_flow import find_flow, flow_progress
+
+    flow = await find_flow(db, audit.project_id, audit_id)
+    progress = (
+        await flow_progress(db, flow, audit.status.value, source_pending, platforms)
+        if flow is not None else {}
+    )
     return {
         "audit_id": str(audit_id),
+        **progress,
         "analysis_status": latest_run.status if latest_run else None,
         "semantic_error_count": (latest_run.coverage or {}).get(
             "semantic_error_count", 0
@@ -1162,6 +1244,9 @@ async def capture_status(
         "source_pending": source_pending or 0,
         "status": audit.status.value,
         "expected_samples": config.expected_samples,
+        "platforms": [
+            {"platform": platform, **counts} for platform, counts in sorted(platforms.items())
+        ],
         "sealed": sum(sample.status == "sealed" for sample in samples),
         "failed": sum(sample.status == "failed" for sample in samples),
         "published_run_id": state.published_run_id if state else None,
@@ -1175,13 +1260,56 @@ async def capture_status(
                 "sample_index": sample.sample_index,
                 "prompt_version_id": sample.prompt_version_id,
                 "status": sample.status,
-                "attempt_count": sum(
-                    attempt.sample_id == sample.id for attempt in attempts
-                ),
+                "attempt_count": attempts[sample.id],
             }
             for sample in samples
+            if not summary_only
         ],
     }
+
+
+@router.get("/audits/{audit_id}/capture/samples")
+async def get_capture_records(
+    audit_id: int,
+    platform: str | None = Query(None, max_length=50),
+    prompt_id: int | None = Query(None, ge=1),
+    status: CaptureState | None = None,
+    cursor: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
+    limit: int = Query(25, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    audit = await get_audit_for_project(db, user, audit_id)
+    return await list_capture_records(
+        db, audit.project_id, audit_id,
+        platform=platform, prompt_id=prompt_id, status=status, cursor=cursor, limit=limit,
+    )
+
+
+@router.get("/audits/{audit_id}/capture/samples/{sample_id}")
+async def get_capture_record(
+    audit_id: int,
+    sample_id: str = Path(pattern=r"^[a-f0-9]{32}$"),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    audit = await get_audit_for_project(db, user, audit_id)
+    return await capture_record(db, audit.project_id, audit_id, sample_id)
+
+
+@router.get("/audits/{audit_id}/capture/samples/{sample_id}/sources/{ordinal}/text")
+async def get_capture_source_text(
+    audit_id: int,
+    sample_id: str = Path(pattern=r"^[a-f0-9]{32}$"),
+    ordinal: int = Path(ge=1, le=200),
+    snapshot_id: str = Query(pattern=r"^[a-f0-9]{32}$"),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    audit = await get_audit_for_project(db, user, audit_id)
+    return await capture_source_text(
+        db, audit.project_id, audit_id, sample_id, ordinal, snapshot_id
+    )
 
 
 def require_writer(user: dict):
@@ -1232,6 +1360,74 @@ async def intelligence_report(
     if not settings.intelligence_enabled:
         raise HTTPException(503, "Citation intelligence is not enabled")
     return await audit_report(db, audit)
+
+
+@router.get("/audits/{audit_id}/visibility-score")
+async def audit_visibility_score(
+    audit_id: int,
+    own_target_id: str | None = Query(None, max_length=240),
+    comparison_target_id: str | None = Query(None, max_length=240),
+    platform: str | None = Query(None, max_length=50),
+    scenario: str | None = Query(None, max_length=40),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.visibility_flow import find_flow
+    from app.intelligence.visibility_scoring import score_projection
+
+    audit = await get_audit_for_project(db, user, audit_id)
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    flow = await find_flow(db, audit.project_id, audit_id)
+    if flow is None:
+        raise HTTPException(404, "Visibility v4 audit not found")
+    published = (
+        await db.execute(
+            select(
+                IntelligenceRun.id,
+                IntelligenceRun.summary["visibility_score"].label("scoring"),
+                IntelligenceRun.summary["opportunities"]["items"].label("opportunities"),
+            )
+            .join(
+                AuditIntelligenceState,
+                (AuditIntelligenceState.project_id == IntelligenceRun.project_id)
+                & (AuditIntelligenceState.audit_id == IntelligenceRun.audit_id)
+                & (AuditIntelligenceState.published_run_id == IntelligenceRun.id),
+            )
+            .where(IntelligenceRun.project_id == audit.project_id, IntelligenceRun.audit_id == audit_id)
+        )
+    ).one_or_none()
+    if published and published.scoring:
+        return {
+            "audit_id": str(audit_id),
+            "run_id": published.id,
+            "status": "published",
+            **score_projection(
+                published.scoring,
+                own_target_id=own_target_id,
+                comparison_target_id=comparison_target_id,
+                platform=platform,
+                scenario=scenario,
+                opportunities=published.opportunities or (),
+            ),
+        }
+
+    reason = "capture_failed" if flow.payload.get("skipped") else "analysis_pending"
+    current_job_id = flow.payload.get("current_job_id")
+    if current_job_id:
+        status = await db.scalar(select(AnalysisJob.status).where(
+            AnalysisJob.project_id == audit.project_id,
+            AnalysisJob.id == current_job_id,
+        ))
+        if status == "failed":
+            reason = "analysis_failed"
+        elif status == "succeeded":
+            reason = "scoring_unavailable"
+    return {
+        "audit_id": str(audit_id), "run_id": published.id if published else None,
+        "status": reason, "score": {"value": None, "no_score_reason": reason},
+        "targets": [], "comparison": None, "recommendations": [],
+    }
 
 
 @router.get("/audits/{audit_id}/report/pdf")
@@ -1293,6 +1489,34 @@ async def intelligence_report_pdf(
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.post("/audits/{audit_id}/analysis/retry", status_code=202)
+async def retry_audit_analysis(
+    audit_id: int,
+    data: AnalysisRetry,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.visibility_flow import retry_analysis
+
+    audit = await get_audit_for_project(db, user, audit_id)
+    require_writer(user)
+    if not settings.intelligence_enabled:
+        raise HTTPException(503, "Citation intelligence is not enabled")
+    if not user.get("sub"):
+        raise HTTPException(403, "An identified project writer is required")
+    project_id = audit.project_id
+    await db.rollback()
+    attempt = await retry_analysis(db, project_id, audit_id, data.failed_attempt_id, str(user["sub"]))
+    result = {
+        "attempt_id": attempt.id,
+        "attempt_no": attempt.payload["visibility_attempt"],
+        "snapshot_id": attempt.run_id,
+        "status": attempt.status,
+    }
+    await db.commit()
+    return result
 
 
 @router.post("/audits/{audit_id}/runs", status_code=202)

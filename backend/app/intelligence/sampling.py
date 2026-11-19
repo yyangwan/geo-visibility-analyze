@@ -74,7 +74,10 @@ async def dispatch_attempt(db, sample, attempt_no, *, retry_after_seconds=0):
 async def create_sampling_audit(
     db, project_id: str, request: SamplingRequest, brands: list[dict]
 ):
-    request_hash = stable_hash([request.model_dump(mode="json", by_alias=True), brands])
+    payload = request.model_dump(mode="json", by_alias=True)
+    if request.processing_mode is None:
+        payload.pop("processingMode")
+    request_hash = stable_hash([payload, brands])
     previous = await db.scalar(
         select(SamplingAudit).where(
             SamplingAudit.project_id == project_id,
@@ -126,6 +129,10 @@ async def create_sampling_audit(
     )
     db.add(audit)
     await db.flush()
+    if request.processing_mode == "v4":
+        from app.intelligence.visibility_flow import create_flow
+
+        create_flow(db, project_id, audit.id)
     expected = len(prompts) * len(request.platforms) * request.rounds
     db.add(
         SamplingAudit(

@@ -1,5 +1,7 @@
 """Freeze observations before dispatch; registration never filters analysis input."""
 
+from datetime import datetime
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -34,6 +36,87 @@ KINDS = {
 }
 
 
+async def register_capture_sources(db, project_id, audit_id, sample, response):
+    observations = []
+    for source in response.payload["sources"]:
+        document = None
+        if (
+            source["url"]
+            and source["urlResolution"] == "exact"
+            and source["kind"] != "named_inference"
+        ):
+            try:
+                normalized = normalized_url(source["url"])
+                url_hash = stable_hash(normalized)
+                document = await db.scalar(
+                    select(SourceDocument).where(
+                        SourceDocument.project_id == project_id,
+                        SourceDocument.url_hash == url_hash,
+                    )
+                )
+                if document is None:
+                    document = SourceDocument(
+                        project_id=project_id,
+                        url=normalized,
+                        url_hash=url_hash,
+                        title=source["title"],
+                    )
+                    try:
+                        async with db.begin_nested():
+                            db.add(document)
+                            await db.flush()
+                    except IntegrityError:
+                        document = await db.scalar(
+                            select(SourceDocument)
+                            .where(
+                                SourceDocument.project_id == project_id,
+                                SourceDocument.url_hash == url_hash,
+                            )
+                            .with_for_update()
+                        )
+                        if document is None:
+                            raise
+            except SourceBlocked:
+                pass
+        observation = CitationObservation(
+            project_id=project_id,
+            audit_id=audit_id,
+            response_id=response.id,
+            ordinal=source["ordinal"],
+            platform=sample.platform,
+            kind=source["kind"],
+            url_resolution=source["urlResolution"],
+            url=source["url"],
+            title=source["title"],
+            snippet=source["snippet"],
+            document_id=document.id if document else None,
+            anchor=source["answerAnchor"],
+        )
+        db.add(observation)
+        observations.append(observation)
+    return observations
+
+
+async def queue_source_documents(db, project_id, audit_id, document_ids):
+    for document_id in sorted(set(document_ids)):
+        key = stable_hash(["fetch_document", audit_id, document_id])
+        if not await db.scalar(
+            select(AnalysisJob.id).where(
+                AnalysisJob.project_id == project_id,
+                AnalysisJob.idempotency_hash == key,
+            )
+        ):
+            db.add(
+                AnalysisJob(
+                    project_id=project_id,
+                    kind="fetch_document",
+                    subject_id=document_id,
+                    payload={"audit_id": audit_id},
+                    idempotency_hash=key,
+                )
+            )
+
+
 async def prepare_run(
     db: AsyncSession,
     project_id: str,
@@ -41,6 +124,8 @@ async def prepare_run(
     *,
     enrich: bool = True,
     retry_failed: bool = False,
+    freeze_at: datetime | None = None,
+    settled_at: datetime | None = None,
 ) -> IntelligenceRun:
     # Serialize revisions with an existing project-owned audit row, not MAX alone.
     audit = await db.scalar(
@@ -50,6 +135,11 @@ async def prepare_run(
     )
     if audit is None:
         raise LookupError("Audit not found")
+    if freeze_at is None:
+        from app.intelligence.visibility_flow import find_flow
+
+        if await find_flow(db, project_id, audit_id) is not None:
+            raise HTTPException(409, "Use the failed-attempt retry endpoint for a v4 audit")
     responses = (
         await db.scalars(
             select(PlatformResponseRecord)
@@ -212,6 +302,7 @@ async def prepare_run(
                 "platform": sample.platform, "prompt_hash": version.text_hash,
                 "prompt": version.text, "category": version.category,
                 "prompt_version_id": version.id,
+                **({"prompt_id": str(version.prompt_id)} if freeze_at is not None else {}),
             })
             if sample.status != "sealed" or not sample.selected_response_id:
                 continue
@@ -251,62 +342,9 @@ async def prepare_run(
             )
             if response.id in existing_responses:
                 continue
-            for source in payload["sources"]:
-                document = None
-                if (
-                    source["url"]
-                    and source["urlResolution"] == "exact"
-                    and source["kind"] != "named_inference"
-                ):
-                    try:
-                        normalized = normalized_url(source["url"])
-                        url_hash = stable_hash(normalized)
-                        document = await db.scalar(
-                            select(SourceDocument).where(
-                                SourceDocument.project_id == project_id,
-                                SourceDocument.url_hash == url_hash,
-                            )
-                        )
-                        if document is None:
-                            document = SourceDocument(
-                                project_id=project_id,
-                                url=normalized,
-                                url_hash=url_hash,
-                                title=source["title"],
-                            )
-                            try:
-                                async with db.begin_nested():
-                                    db.add(document)
-                                    await db.flush()
-                            except IntegrityError:
-                                document = await db.scalar(
-                                    select(SourceDocument)
-                                    .where(
-                                        SourceDocument.project_id == project_id,
-                                        SourceDocument.url_hash == url_hash,
-                                    )
-                                    .with_for_update()
-                                )
-                                if document is None:
-                                    raise
-                    except SourceBlocked:
-                        pass
-                observation = CitationObservation(
-                    project_id=project_id,
-                    audit_id=audit_id,
-                    response_id=response.id,
-                    ordinal=source["ordinal"],
-                    platform=sample.platform,
-                    kind=source["kind"],
-                    url_resolution=source["urlResolution"],
-                    url=source["url"],
-                    title=source["title"],
-                    snippet=source["snippet"],
-                    document_id=document.id if document else None,
-                    anchor=source["answerAnchor"],
-                )
-                db.add(observation)
-                observations.append(observation)
+            observations.extend(
+                await register_capture_sources(db, project_id, audit_id, sample, response)
+            )
         await db.flush()
     response_map = {row["id"]: row for row in frozen_responses}
     for observation in observations:
@@ -316,18 +354,28 @@ async def prepare_run(
             continue
         snapshot, fetch = None, None
         if observation.document_id:
-            fetch = await db.scalar(
-                select(SourceFetch)
-                .where(
-                    SourceFetch.project_id == project_id,
-                    SourceFetch.document_id == observation.document_id,
-                    SourceFetch.audit_id == audit_id,
+            query = select(SourceFetch).where(
+                SourceFetch.project_id == project_id,
+                SourceFetch.document_id == observation.document_id,
+                SourceFetch.audit_id == audit_id,
+            )
+            if freeze_at is not None:
+                verified = select(SourceSnapshot.id).where(
+                    SourceSnapshot.project_id == SourceFetch.project_id,
+                    SourceSnapshot.document_id == SourceFetch.document_id,
+                    SourceSnapshot.id == SourceFetch.snapshot_id,
+                    SourceSnapshot.integrity_status == "verified",
+                ).exists()
+                query = query.where(SourceFetch.created_at <= freeze_at).order_by(
+                    verified.desc()
                 )
-                .order_by(SourceFetch.created_at.desc(), SourceFetch.id.desc())
-                .limit(1)
+            fetch = await db.scalar(
+                query.order_by(SourceFetch.created_at.desc(), SourceFetch.id.desc()).limit(1)
             )
             if fetch and fetch.snapshot_id:
                 snapshot = await db.get(SourceSnapshot, fetch.snapshot_id)
+                if freeze_at is not None and snapshot and snapshot.integrity_status != "verified":
+                    snapshot = None
         sources.append(
             {
                 "id": observation.id,
@@ -344,9 +392,12 @@ async def prepare_run(
                 "snapshot_version": snapshot_version(snapshot) if snapshot else None,
                 "answer_anchor": freeze_anchor(observation.anchor, response["text"]),
                 "quality": snapshot.quality if snapshot else {},
-                "fetch_status": fetch.status
+                "fetch_status": (
+                    "archive_unverified" if freeze_at is not None and fetch.snapshot_id and not snapshot
+                    else fetch.status
+                )
                 if fetch
-                else "pending"
+                else ("archive_deadline" if freeze_at is not None else "pending")
                 if observation.document_id
                 else "unavailable",
             }
@@ -378,6 +429,12 @@ async def prepare_run(
         if sampling
         else len(frozen_responses),
     }
+    if freeze_at is not None:
+        manifest["visibility_flow"] = {
+            "mode": "v4",
+            "archive_cutoff_at": utc_isoformat(freeze_at),
+            "settled_at": utc_isoformat(settled_at),
+        }
     from app.intelligence.brand_presence import freeze_registered_targets
 
     manifest["brand_targets"] = freeze_registered_targets(manifest["brands"])
@@ -400,6 +457,12 @@ async def prepare_run(
         base = manifest["evaluation_base_cohort"]
         manifest["evaluation_cohort"] = review.cohort if review and review.base_hash == base["hash"] else base
         manifest["evaluation_review"] = {"id": review.id, "version": review.version} if review and review.base_hash == base["hash"] else None
+    if freeze_at is not None:
+        from app.intelligence.visibility_scoring import freeze_visibility_scope
+
+        manifest["visibility_score_scope"] = freeze_visibility_scope(
+            evaluation_samples, manifest["evaluation_cohort"]
+        )
     _, base_url, model = settings.get_analysis_llm_config()
     signature, input_hash = analysis_signature(model, base_url), stable_hash(manifest)
     previous = await db.scalar(
@@ -493,26 +556,12 @@ async def prepare_run(
             kind="analyze_run",
             subject_id=run.id,
             idempotency_hash=stable_hash(["analyze_run", run.id]),
+            payload={"visibility_attempt": 1} if freeze_at is not None else {},
         )
     )
     if enrich:
-        for document_id in sorted(
-            {source["document_id"] for source in sources if source["document_id"]}
-        ):
-            key = stable_hash(["fetch_document", audit_id, document_id])
-            if not await db.scalar(
-                select(AnalysisJob.id).where(
-                    AnalysisJob.project_id == project_id,
-                    AnalysisJob.idempotency_hash == key,
-                )
-            ):
-                db.add(
-                    AnalysisJob(
-                        project_id=project_id,
-                        kind="fetch_document",
-                        subject_id=document_id,
-                        payload={"audit_id": audit_id},
-                        idempotency_hash=key,
-                    )
-                )
+        await queue_source_documents(
+            db, project_id, audit_id,
+            (source["document_id"] for source in sources if source["document_id"]),
+        )
     return run

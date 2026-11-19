@@ -10,7 +10,9 @@ from app.intelligence.blob import digest
 from app.intelligence.citation_context import (
     EVIDENCE_POLICY,
     PAIRS_PER_CLAIM,
+    answer_reference_markers,
     association,
+    claim_reference_tokens,
     snapshot_matches,
 )
 from app.intelligence.evidence import SYSTEM, checked_verdict, relevance
@@ -153,7 +155,8 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
         if row.method != "model_output_invalid" and row.verification.get("result")
     }
     responses = {row["id"]: row for row in manifest["responses"]}
-    plans, processed, deferred, invalid, selected_count, total = [], 0, 0, 0, 0, 0
+    plans, work = [], []
+    processed, deferred, invalid, selected_count, total = 0, 0, 0, 0, 0
     for answer_segment, cache in applications:
         response = responses.get(answer_segment.owner_id)
         if (
@@ -169,8 +172,8 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
             if source["response_id"] == response["id"]
             and source["platform"] == response["platform"]
             and source["kind"] == "answer_reference"
-            and source.get("url_resolution") == "exact"
         ]
+        markers = answer_reference_markers(response, references)
         for claim in cache.result.get("claims", []):
             start, end = (
                 answer_segment.start_offset + claim["start"],
@@ -178,12 +181,19 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
             )
             if not (start < end and response["text"][start:end] == claim["quote"]):
                 continue
+            model_quote, reference_ordinals = claim_reference_tokens(
+                response["text"], start, end, markers
+            )
+            if not model_quote.strip():
+                continue
             claim_hash = stable_hash(
                 [answer_segment.id, claim["start"], claim["end"], claim["quote"]]
             )
             claim_plans, ranked = [], []
             for source in references:
-                link = association(source, response, start, end)
+                if source.get("url_resolution") != "exact":
+                    continue
+                link = association(source, response, start, end, reference_ordinals)
                 snapshot = snapshot_map.get(source.get("snapshot_id"))
                 candidates = (
                     source_segments.get(source.get("snapshot_id"), [])
@@ -248,142 +258,181 @@ async def align_claims(pipeline, lease, manifest, api_key, base_url, model):
                     ]
                 )
                 plans.append(plan)
-            for _, _, _, _, _, _, plan, source, segment in chosen:
-                operation_id = stable_hash([claim_hash, source["id"], segment.id])
-                input_hash = stable_hash(
-                    [
-                        EVIDENCE_POLICY,
-                        SYSTEM,
-                        model,
-                        base_url,
-                        claim["quote"],
-                        segment.text,
-                    ]
-                )
-                trace = {
-                    "segment_id": segment.id,
-                    "start": segment.start_offset,
-                    "end": segment.end_offset,
-                    "status": "deferred",
-                }
-                plan["selected"].append(trace)
-                prior = by_pair.get((claim_hash, source["id"], segment.id))
-                if prior:
-                    trace.update(
-                        status="invalid"
-                        if prior.method == "model_output_invalid"
-                        else "checked",
-                        evidence_id=prior.id,
+            for position, (
+                _,
+                priority,
+                match,
+                _,
+                _,
+                _,
+                plan,
+                source,
+                segment,
+            ) in enumerate(chosen):
+                work.append(
+                    (
+                        (
+                            position,
+                            priority,
+                            match,
+                            response["id"],
+                            start,
+                            source["id"],
+                        ),
+                        answer_segment,
+                        claim,
+                        claim_hash,
+                        model_quote,
+                        plan,
+                        source,
+                        segment,
                     )
-                    invalid += prior.method == "model_output_invalid"
-                    processed += 1
-                    continue
-                receipt, usage = None, {}
-                verdict = reusable.get(input_hash)
-                method = (
-                    "same_text_reuse" if verdict is not None else "model_verification"
                 )
-                if verdict is None:
-                    if api_key:
-                        receipt = await pipeline.reserve_model_request(
-                            lease,
-                            phase="verification",
-                            messages=[
-                                SYSTEM,
-                                json.dumps(
-                                    {
-                                        "answer_claim": claim["quote"],
-                                        "source_passage": segment.text,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            ],
-                            max_output=structured_options(
-                                base_url, model, verification=True
-                            )["max_tokens"],
-                            subject_id=operation_id,
-                        )
-                    else:
 
-                        async def defer(db, operation_id=operation_id):
-                            await pipeline.record_model_deferral(
-                                db,
-                                lease,
-                                "verification",
-                                operation_id,
-                                "analysis_provider_unconfigured",
-                            )
-
-                        await pipeline.queue.checkpoint(lease, defer)
-                    if not receipt:
-                        deferred += 1
-                        continue
-                    try:
-                        raw, usage = await pipeline.verify(
-                            claim["quote"], segment.text, api_key, base_url, model
-                        )
-                        verdict = checked_verdict(segment.text, raw, claim["quote"])
-                        if (
-                            raw.get("relation") != "unverified"
-                            and verdict["relation"] == "unverified"
-                        ):
-                            raise SemanticOutputError(
-                                "Ungrounded verification quotation"
-                            )
-                        source_span(segment, verdict["source_quote"])
-                    except (
-                        ValidationError,
-                        json.JSONDecodeError,
-                        SemanticOutputError,
-                    ) as error:
-                        usage = getattr(error, "usage", usage)
-                        verdict, method = (
-                            {"relation": "unverified", "source_quote": ""},
-                            "model_output_invalid",
-                        )
-                    except Exception:
-                        await pipeline.settle_model_request(lease, receipt, None)
-                        raise
-                proof = {
-                    "policy": EVIDENCE_POLICY,
-                    "input_hash": input_hash,
-                    "association": plan["association"],
-                    "answer_span": plan["answer_span"],
-                    "source_span": source_span(segment, verdict["source_quote"]),
-                    "result": verdict,
-                    "checked_dimensions": [
-                        item["dimension"] for item in verdict.get("checks", [])
+    # Spend at most one new check per claim per pass. An explicit reference
+    # and a more relevant passage take precedence within a pass.
+    for (
+        _,
+        answer_segment,
+        claim,
+        claim_hash,
+        model_quote,
+        plan,
+        source,
+        segment,
+    ) in sorted(work, key=lambda item: item[0]):
+        operation_id = stable_hash([claim_hash, source["id"], segment.id])
+        input_hash = stable_hash(
+            [
+                EVIDENCE_POLICY,
+                SYSTEM,
+                model,
+                base_url,
+                model_quote,
+                segment.text,
+            ]
+        )
+        trace = {
+            "segment_id": segment.id,
+            "start": segment.start_offset,
+            "end": segment.end_offset,
+            "status": "deferred",
+        }
+        plan["selected"].append(trace)
+        prior = by_pair.get((claim_hash, source["id"], segment.id))
+        if prior:
+            trace.update(
+                status="invalid"
+                if prior.method == "model_output_invalid"
+                else "checked",
+                evidence_id=prior.id,
+            )
+            invalid += prior.method == "model_output_invalid"
+            processed += 1
+            continue
+        receipt, usage = None, {}
+        verdict = reusable.get(input_hash)
+        method = "same_text_reuse" if verdict is not None else "model_verification"
+        if verdict is None:
+            if api_key:
+                receipt = await pipeline.reserve_model_request(
+                    lease,
+                    phase="verification",
+                    messages=[
+                        SYSTEM,
+                        json.dumps(
+                            {
+                                "answer_claim": model_quote,
+                                "source_passage": segment.text,
+                            },
+                            ensure_ascii=False,
+                        ),
                     ],
-                }
-                saved = ClaimEvidence(
-                    project_id=lease.project_id,
-                    run_id=lease.run_id,
-                    claim_hash=claim_hash,
-                    answer_segment_id=answer_segment.id,
-                    citation_id=source["id"],
-                    source_segment_id=segment.id,
-                    answer_quote=claim["quote"],
-                    source_quote=verdict["source_quote"],
-                    relation=verdict["relation"],
-                    method=method,
-                    verification=proof,
+                    max_output=structured_options(base_url, model, verification=True)[
+                        "max_tokens"
+                    ],
+                    subject_id=operation_id,
                 )
+            else:
 
-                async def save(db, saved=saved, receipt=receipt, usage=usage):
-                    if receipt:
-                        await pipeline.record_model_usage(db, lease, receipt, usage)
-                    db.add(saved)
+                async def defer(db, operation_id=operation_id):
+                    await pipeline.record_model_deferral(
+                        db,
+                        lease,
+                        "verification",
+                        operation_id,
+                        "analysis_provider_unconfigured",
+                    )
 
-                await pipeline.queue.checkpoint(lease, save)
-                trace.update(
-                    status="invalid" if method == "model_output_invalid" else "checked",
-                    evidence_id=saved.id,
+                await pipeline.queue.checkpoint(lease, defer)
+            if not receipt:
+                deferred += 1
+                continue
+            try:
+                raw, usage = await pipeline.verify(
+                    model_quote, segment.text, api_key, base_url, model
                 )
-                by_pair[(claim_hash, source["id"], segment.id)] = saved
-                if method != "model_output_invalid":
-                    reusable[input_hash] = verdict
-                invalid += method == "model_output_invalid"
-                processed += 1
+                verdict = checked_verdict(segment.text, raw, model_quote)
+                if (
+                    raw.get("relation") != "unverified"
+                    and verdict["relation"] == "unverified"
+                ):
+                    raise SemanticOutputError("Ungrounded verification quotation")
+                source_span(segment, verdict["source_quote"])
+            except (
+                ValidationError,
+                json.JSONDecodeError,
+                SemanticOutputError,
+            ) as error:
+                usage = getattr(error, "usage", usage)
+                verdict, method = (
+                    {"relation": "unverified", "source_quote": ""},
+                    "model_output_invalid",
+                )
+            except Exception:
+                await pipeline.settle_model_request(lease, receipt, None)
+                raise
+        proof = {
+            "policy": EVIDENCE_POLICY,
+            "input_hash": input_hash,
+            "association": plan["association"],
+            "answer_span": plan["answer_span"],
+            "model_answer_quote": model_quote,
+            "source_span": source_span(segment, verdict["source_quote"]),
+            "result": verdict,
+            "checked_dimensions": [
+                item["dimension"] for item in verdict.get("checks", [])
+            ],
+        }
+        saved = ClaimEvidence(
+            project_id=lease.project_id,
+            run_id=lease.run_id,
+            claim_hash=claim_hash,
+            answer_segment_id=answer_segment.id,
+            citation_id=source["id"],
+            source_segment_id=segment.id,
+            answer_quote=claim["quote"],
+            source_quote=verdict["source_quote"],
+            relation=verdict["relation"],
+            method=method,
+            verification=proof,
+        )
+
+        async def save(db, saved=saved, receipt=receipt, usage=usage):
+            if receipt:
+                await pipeline.record_model_usage(db, lease, receipt, usage)
+            db.add(saved)
+
+        await pipeline.queue.checkpoint(lease, save)
+        trace.update(
+            status="invalid" if method == "model_output_invalid" else "checked",
+            evidence_id=saved.id,
+        )
+        by_pair[(claim_hash, source["id"], segment.id)] = saved
+        if method != "model_output_invalid":
+            reusable[input_hash] = verdict
+        invalid += method == "model_output_invalid"
+        processed += 1
     for plan in plans:
         plan["candidate_excluded_ranges"] = plan["unchecked_ranges"]
         plan["unchecked_ranges"] = merge_ranges(

@@ -123,6 +123,12 @@ async def final_inputs_ready(db, project_id, audit_id):
 
 
 async def request_refresh(db, project_id, audit_id, reason, event_id):
+    from app.intelligence.visibility_flow import capture_event, find_flow
+
+    if await find_flow(db, project_id, audit_id) is not None:
+        if reason in ("sample_sealed", "capture_terminal"):
+            await capture_event(db, project_id, audit_id, reason, event_id)
+        return
     state = await state_for_audit(db, project_id, audit_id)
     event_hash = stable_hash([audit_id, reason, event_id])
     if await db.scalar(

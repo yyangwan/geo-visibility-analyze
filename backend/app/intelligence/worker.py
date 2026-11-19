@@ -84,6 +84,7 @@ async def main():
     queue = JobQueue(async_session, f"{socket.gethostname()}-{uuid4().hex[:8]}")
     pipeline = Pipeline(queue, blobs)
     from app.intelligence.refresh import recover_settled_refreshes
+    from app.intelligence.visibility_flow import reconcile_flows
 
     async with async_session() as db, db.begin():
         await recover_settled_refreshes(db)
@@ -109,6 +110,7 @@ async def main():
 
             async with async_session() as db, db.begin():
                 await reconcile_capture_failures(db)
+            await reconcile_flows(async_session)
             lease = await queue.claim()
             if lease:
                 monitor.state = "working"

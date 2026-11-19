@@ -12,7 +12,12 @@ from app.api.auth import get_current_user
 from app.config import settings
 from app.intelligence.blob import LocalBlobStore, digest
 from app.intelligence.capture_contract import Source
-from app.intelligence.citation_context import association, freeze_anchor
+from app.intelligence.citation_context import (
+    answer_reference_markers,
+    association,
+    claim_reference_tokens,
+    freeze_anchor,
+)
 from app.intelligence.evidence import checked_verdict
 from app.intelligence.evidence_alignment import source_span
 from app.intelligence.ingestion import prepare_run
@@ -54,6 +59,28 @@ def test_anchor_uses_code_points_and_fails_closed_on_tampered_frozen_text():
 )
 def test_invalid_anchor_is_explicit_not_a_claim_match(raw):
     assert freeze_anchor(raw, "云衡质保三年")["status"] == "invalid"
+
+
+def test_reference_markers_preserve_claim_offsets_and_real_quantities():
+    claim = "支持对比竞品9。"
+    text = (
+        f"🧭{claim}可看引用详情9。报价可导出2。报告可回读2。"
+        "最多监测9。最多监测9。支持2个竞品。支持版本9。支持型号9。\n参考来源\n文档"
+    )
+    sources = [{"ordinal": 2}, {"ordinal": 9}]
+    answer = {"text": text, "platform": "qwen", "surface": "web"}
+    markers = answer_reference_markers(answer, sources)
+    clean, ordinals = claim_reference_tokens(text, 1, 1 + len(claim), markers)
+    assert clean == "支持对比竞品。" and ordinals == {9}
+    assert text[1 : 1 + len(claim)] == claim
+    assert len(markers) == 4
+    assert not answer_reference_markers({**answer, "platform": "deepseek"}, sources)
+    assert not answer_reference_markers({**answer, "surface": "app"}, sources)
+    assert association(sources[0], {"text": text}, 1, 1 + len(claim), ordinals) == {
+        "eligible": False,
+        "method": "different_reference_marker",
+        "priority": 0,
+    }
 
 
 @pytest.mark.parametrize("raw", [[True, 3], [1.0, 3]])
@@ -117,7 +144,9 @@ def test_dimension_conflict_cannot_hide_behind_overall_supports():
 async def seed_sources(db, blobs, audit_id, source_texts, project="p1"):
     for index, text in enumerate(source_texts):
         url = f"https://example.com/article-{index}"
-        document = SourceDocument(project_id=project, url=url, url_hash=stable_hash(url))
+        document = SourceDocument(
+            project_id=project, url=url, url_hash=stable_hash(url)
+        )
         db.add(document)
         await db.flush()
         blob = await blobs.put_immutable(
@@ -297,6 +326,24 @@ async def test_more_than_five_passages_has_explicit_unchecked_ranges(
         for a, b in checked_ranges
         for start, end in plan["unchecked_ranges"]
     )
+
+
+@pytest.mark.asyncio
+async def test_limited_verification_checks_distinct_claims_first(
+    db_session, monkeypatch, tmp_path
+):
+    first, second = "云衡支持分仓。", "云衡支持核算。"
+    _, calls, _ = await analyze_fixture(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        text=first + second,
+        quotes=[first, second],
+        source_texts=["云衡支持分仓和核算。", "云衡公开资料。", "云衡入门指南。"],
+        request_limit=13,
+    )
+    assert len(calls) == 2
+    assert {claim for claim, _ in calls} == {first, second}
 
 
 @pytest.mark.asyncio

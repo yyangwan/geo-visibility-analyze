@@ -92,7 +92,17 @@ class VisibleText(HTMLParser):
         self.parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style", "noscript", "svg", "nav", "footer", "header"):
+        if tag in (
+            "head",
+            "title",
+            "script",
+            "style",
+            "noscript",
+            "svg",
+            "nav",
+            "footer",
+            "header",
+        ):
             self.suppressed.append(tag)
         if not self.suppressed and tag in (
             "p",
@@ -203,6 +213,14 @@ async def capture_source(
                         raise SourceUnavailable("empty_content", 200)
                     # A successful HTTP request does not prove full article coverage.
                     return CapturedSource(
-                        current, 200, raw, text, "unknown", encoding=response.encoding or "utf-8"
+                        current,
+                        200,
+                        raw,
+                        text,
+                        "unknown",
+                        extractor_version="html-visible-v1"
+                        if mime == "text/plain"
+                        else "html-visible-v2",
+                        encoding=response.encoding or "utf-8",
                     )
         raise SourceUnavailable("redirect_limit")
