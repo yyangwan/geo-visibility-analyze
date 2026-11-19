@@ -10,6 +10,7 @@ from app.intelligence.visibility_scoring import (
     link_action_opportunities,
     score_projection,
     score_rows,
+    supports_observation,
 )
 
 
@@ -24,6 +25,32 @@ def plan(sample_id, platform, prompt_id, *, prompt="仓库盘点工具如何选�
         "category": "recommend",
         "sample_index": 1,
     }
+
+
+def test_source_claim_matches_its_own_recommendation_section():
+    text = "1. 云衡\n可导出报表。\n2. 锐川\n可分仓统计。"
+    response = {"text": text}
+
+    def span(quote):
+        start = text.index(quote)
+        return {"start": start, "end": start + len(quote), "quote": quote}
+
+    first = {**span("1. 云衡"), "segment_id": "answer"}
+    second = {**span("2. 锐川"), "segment_id": "answer"}
+    item = {
+        "answer_quote": "可导出报表。",
+        "answer_segment_id": "answer",
+        "claim_subject": "云衡",
+        "verification": {
+            "answer_span": span("可导出报表。"),
+            "association": {"method": "answer_reference_marker"},
+        },
+    }
+    assert supports_observation(item, response, [first], [first, second], {"云衡"})
+    assert not supports_observation(item, response, [second], [first, second], {"锐川"})
+    assert not supports_observation(
+        {**item, "claim_subject": "锐川"}, response, [first], [first, second], {"云衡"}
+    )
 
 
 def answer(cell, text, status="complete"):
@@ -209,7 +236,12 @@ def test_v4_weights_scored_platforms_and_comparison_uses_only_pairs():
                     "owner_kind": "answer",
                     "owner_id": a1["id"],
                     "quote": "两个仓库之间可以自动同步库存",
-                }
+                },
+                {
+                    "owner_kind": "snapshot",
+                    "owner_id": "frozen-source",
+                    "quote": "系统会同步两个仓库的库存数量。",
+                },
             ]
         },
     }
@@ -262,6 +294,22 @@ def test_v4_weights_scored_platforms_and_comparison_uses_only_pairs():
         "recommendations"
     ]
     assert all("action_opportunity" not in item for item in wrong_platform)
+    swapped_snapshot = {
+        **opportunity,
+        "task_pack": {
+            "diagnostic_evidence": [
+                opportunity["task_pack"]["diagnostic_evidence"][0],
+                {
+                    **opportunity["task_pack"]["diagnostic_evidence"][1],
+                    "owner_id": "other-version",
+                },
+            ]
+        },
+    }
+    mismatched = score_projection(payload, opportunities=[swapped_snapshot])
+    assert all(
+        "action_opportunity" not in item for item in mismatched["recommendations"]
+    )
     assert recommendation["retest"]["prompt_id"] == "1"
 
     filtered = score_projection(

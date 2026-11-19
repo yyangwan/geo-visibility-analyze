@@ -543,9 +543,113 @@ def platform_opportunities(data):
                     )
 
 
+def supported_comparison_opportunities(data):
+    """Give a supported score recommendation a plan with the same evidence."""
+    projection = data.summary.get("visibility_score") or {}
+    observations = projection.get("observations", {})
+    signals = {
+        row["id"]: row
+        for row in data.summary.get("brand_signals", {}).get("observations", ())
+    }
+    evidence = {
+        (
+            row["response_id"],
+            row["citation_id"],
+            row["snapshot_id"],
+            row["answer_quote"],
+            row["source_quote"],
+        ): row
+        for row in data.summary.get("claim_evidence", ())
+        if row["relation"] == "supports"
+    }
+    for target in projection.get("targets", ()):
+        if target["role"] == "own":
+            continue
+        for sample_id, rival in observations.get(target["target_id"], {}).items():
+            response = data.responses.get(rival["response_id"])
+            if not response or not rival.get("source_support"):
+                continue
+            answer_refs = [
+                data.ref(signals[item["signal_id"]])
+                for item in rival["evidence"][:3]
+                if item["signal_id"] in signals
+            ]
+            answer_refs = [ref for ref in answer_refs if ref]
+            if not answer_refs:
+                continue
+            for support in rival["source_support"][:3]:
+                row = evidence.get(
+                    (
+                        response["id"],
+                        support["citation_id"],
+                        support["snapshot_id"],
+                        support["answer_quote"],
+                        support["source_quote"],
+                    )
+                )
+                if not row:
+                    continue
+                verification = row.get("verification") or {}
+                source_span, answer_span = (
+                    verification.get("source_span"),
+                    verification.get("answer_span"),
+                )
+                if not source_span or not answer_span:
+                    continue
+                article = data.ref(
+                    {
+                        **source_span,
+                        "segment_id": row["source_segment_id"],
+                        "owner_kind": "snapshot",
+                        "owner_id": row["snapshot_id"],
+                    }
+                )
+                claim = data.ref(
+                    {
+                        **answer_span,
+                        "segment_id": row["answer_segment_id"],
+                        "owner_kind": "answer",
+                        "owner_id": response["id"],
+                    }
+                )
+                if not article or not claim:
+                    continue
+                for own in data.own:
+                    own_values = (
+                        observations.get(own["target_id"], {})
+                        .get(sample_id, {})
+                        .get("dimensions")
+                    )
+                    if not own_values or not any(
+                        rival["dimensions"][key] > value
+                        for key, value in own_values.items()
+                    ):
+                        continue
+                    data.add(
+                        own,
+                        response,
+                        kind="content_evidence",
+                        comparison=target,
+                        goal=[
+                            "verified_comparison_source",
+                            target["target_id"],
+                            row["citation_id"],
+                            row["answer_quote"],
+                        ],
+                        topic=claim["quote"],
+                        evidence=[*answer_refs, claim, article],
+                        finding=f"本次回答中的竞品表述「{claim['quote']}」可回溯到对应引用正文。",
+                        source_ids=[row["citation_id"]],
+                        intent="material_verification",
+                        needs_scope_review=not data.scope(response)["neutral"],
+                        unknowns=["竞品原文只用于诊断；我方对外表述仍需核验自身事实。"],
+                    )
+
+
 def build_opportunities(run, summary, applications):
     data = Inputs(run, summary, applications)
     comparison_opportunities(data)
+    supported_comparison_opportunities(data)
     unit_opportunities(data)
     perception_and_conflict_opportunities(data)
     platform_opportunities(data)

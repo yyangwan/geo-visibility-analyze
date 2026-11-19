@@ -194,6 +194,35 @@ def checked_span(row, response):
     )
 
 
+def supports_observation(item, response, observed, signals, names):
+    if any(item["answer_quote"] in row["quote"] for row in observed):
+        return True
+    verification = item.get("verification") or {}
+    span = verification.get("answer_span")
+    if (
+        not span
+        or span["quote"] != item["answer_quote"]
+        or not checked_span(span, response)
+        or (item.get("claim_subject") or "").strip().casefold() not in names
+        or (verification.get("association") or {}).get("method")
+        not in ("answer_anchor", "answer_reference_marker")
+    ):
+        return False
+    # An extracted recommendation may quote a heading while the same product's
+    # capability claim is below it. Do not cross into another product's section.
+    preceding = [
+        row
+        for row in signals
+        if row.get("segment_id") == item.get("answer_segment_id")
+        and row["end"] <= span["start"]
+        and checked_span(row, response)
+    ]
+    if not preceding:
+        return False
+    latest = max(row["end"] for row in preceding)
+    return all(row in observed for row in preceding if row["end"] == latest)
+
+
 def sample_observation(
     cell, response, target, proof, mentions, signals, ranking, source_evidence, entity
 ):
@@ -291,10 +320,18 @@ def sample_observation(
         and item["snapshot_id"]
         and item.get("source_quote")
         and item.get("answer_quote")
-        and any(item["answer_quote"] in row["quote"] for row in observed)
+        and supports_observation(item, response, observed, signals, names)
     ]
     reason_value = REASON_VALUES[reason_level]
-    if strength >= 2 and reason_level == "need_matched" and linked_support:
+    if (
+        strength >= 2
+        and reason_level == "need_matched"
+        and any(
+            support["answer_quote"] in row["quote"]
+            for support in linked_support
+            for row in observed
+        )
+    ):
         reason_value = 100
     return {
         "dimensions": {
@@ -327,10 +364,30 @@ def build_visibility_score(manifest, applications, summary):
     for row in summary["brand_signals"]["observations"]:
         signals[row["response_id"]].append(row)
     sources = manifest.get("sources", [])
-    ordinals = {source["id"]: source["ordinal"] for source in sources}
+    sources_by_id = {source["id"]: source for source in sources}
+    claim_subjects = {
+        (row["segment_id"], row["start"], row["end"], row["quote"]): row.get("subject")
+        for row in summary.get("claims", ())
+        if row["owner_kind"] == "answer"
+    }
     for row in summary["claim_evidence"]:
+        source = sources_by_id.get(row["citation_id"])
+        if not source or source.get("snapshot_id") != row["snapshot_id"]:
+            continue
+        span = (row.get("verification") or {}).get("answer_span") or {}
         supporting_sources[row["response_id"]].append(
-            {**row, "ordinal": ordinals.get(row["citation_id"])}
+            {
+                **row,
+                "ordinal": source["ordinal"],
+                "claim_subject": claim_subjects.get(
+                    (
+                        row.get("answer_segment_id"),
+                        span.get("start"),
+                        span.get("end"),
+                        row["answer_quote"],
+                    )
+                ),
+            }
         )
     responses = {row["sample_id"]: row for row in manifest["responses"]}
     ranks = {
@@ -548,10 +605,12 @@ def link_action_opportunities(
         pack = opportunity.get("task_pack")
         if opportunity.get("own_target_id") != own_target or not pack:
             continue
-        answer_refs = defaultdict(list)
+        answer_refs, snapshot_refs = defaultdict(list), defaultdict(list)
         for item in pack.get("diagnostic_evidence", ()):
             if item["owner_kind"] == "answer" and item.get("quote"):
                 answer_refs[item["owner_id"]].append(item["quote"])
+            if item["owner_kind"] == "snapshot" and item.get("quote"):
+                snapshot_refs[item["owner_id"]].append(item["quote"])
         for scope in opportunity.get("subtargets", ()):
             if scope.get("comparison_target_id") == comparison_target:
                 by_scope[scope["platform"], scope["response_id"]].append(
@@ -559,21 +618,30 @@ def link_action_opportunities(
                         opportunity["id"],
                         scope["scenario_id"],
                         answer_refs[scope["response_id"]],
+                        snapshot_refs,
                     )
                 )
     for suggestion in suggestions:
         quotes = [item["quote"] for item in suggestion["evidence"]]
-        for opportunity_id, scenario, proofs in by_scope[
+        for opportunity_id, scenario, proofs, snapshots in by_scope[
             suggestion["platform"], suggestion["response_id"]
         ]:
-            if any(
+            if not any(
                 proof in quote or quote in proof for proof in proofs for quote in quotes
             ):
-                suggestion["action_opportunity"] = {
-                    "id": opportunity_id,
-                    "scenario": scenario,
-                }
-                break
+                continue
+            support = suggestion.get("source_support", ())
+            if support and not any(
+                row["source_quote"] in quote
+                for row in support
+                for quote in snapshots[row["snapshot_id"]]
+            ):
+                continue
+            suggestion["action_opportunity"] = {
+                "id": opportunity_id,
+                "scenario": scenario,
+            }
+            break
     return suggestions
 
 

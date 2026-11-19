@@ -21,6 +21,8 @@ checks: [{dimension: subject/scope/time/number/condition, relation: supports/par
 answer_quote: 回答中的逐字片段, source_quote: 来源中的逐字片段}]}。
 五个维度分别核对。没有相应信息则unverified且引文可空，不推断不同时间的事实必然矛盾。
 完整支持才能用supports；范围/时间不一致用partial；明确冲突用contradicts；不足以判断用unverified。
+引文角标、参考编号、列表序号都不是事实数字。来源未给出同口径的相反事实时，不用contradicts。
+观点包含多项事实时，若原文片段只证明其中一部分，用partial；相关不等于支持。
 source_quote只能来自来源片段，不能输出任何ID、链接或新增事实。"""
 
 
