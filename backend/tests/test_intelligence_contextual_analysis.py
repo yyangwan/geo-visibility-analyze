@@ -350,6 +350,7 @@ async def test_runtime_preserves_all_subjects_but_only_solution_enters_compariso
         "千问",
         "多门店权限",
     }
+    assert {item["name"] for item in run.summary["answer_brands"]} == {"云衡", "千问"}
     assert [item["name"] for item in run.summary["brand_presence"]["targets"]] == [
         "云衡"
     ]

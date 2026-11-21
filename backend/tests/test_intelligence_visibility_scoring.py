@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app.intelligence.brand_evaluation import freeze_cohort
 from app.intelligence.brand_ranking import verified_ranking
@@ -319,16 +320,10 @@ def test_v4_weights_scored_platforms_and_comparison_uses_only_pairs():
     assert filtered["scope_score"]["value"] == 80
     assert filtered["comparison"]["common_sample_count"] == 1
     assert filtered["comparison"]["other"]["value"] == 0
-    source_only = score_projection(payload, comparison_target_id="entity:source-author")
-    assert source_only["comparison"]["no_score_reason"] == "no_common_verified_samples"
-    assert (
-        next(
-            row
-            for row in result["targets"]
-            if row["target_id"] == "entity:source-author"
-        )["identity_method"]
-        == "source_only"
-    )
+    with pytest.raises(HTTPException) as source_only:
+        score_projection(payload, comparison_target_id="entity:source-author")
+    assert source_only.value.status_code == 404
+    assert "entity:source-author" not in {row["target_id"] for row in result["targets"]}
 
 
 def test_partial_answer_and_identity_uncertainty_do_not_turn_into_zero():
@@ -471,9 +466,7 @@ def test_v4_keeps_recommendations_from_ordinary_numbered_lists(heading, score, r
     )
     observation = result["observations"]["entity:other"][cell["sample_id"]]
     projection = score_projection(result, comparison_target_id="entity:other")
-    assert result["observations"]["entity:source-other"][cell["sample_id"]][
-        "reason"
-    ] == ("brand_observed_only_in_sources")
+    assert "entity:source-other" not in result["observations"]
     assert observation.get("reason") == reason
     if reason:
         assert projection["comparison"]["common_sample_count"] == 0

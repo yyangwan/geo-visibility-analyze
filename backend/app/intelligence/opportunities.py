@@ -505,8 +505,9 @@ def platform_opportunities(data):
         for response in data.responses.values():
             observation = data.observations.get((own["target_id"], response["id"]))
             if observation and observation["state"] != "unknown":
-                grouped[response["prompt_hash"]].append((response, observation))
-        for prompt_hash, rows in grouped.items():
+                key = (response.get("prompt_version_id") or response["prompt_hash"], response["prompt_hash"])
+                grouped[key].append((response, observation))
+        for (prompt_version, prompt_hash), rows in grouped.items():
             for (left, first), (right, second) in combinations(rows, 2):
                 if left["platform"] == right["platform"]:
                     continue
@@ -529,7 +530,7 @@ def platform_opportunities(data):
                         own,
                         weak,
                         kind="platform_difference",
-                        goal=["platform_observation", prompt_hash, dimension],
+                        goal=["platform_observation", prompt_version, prompt_hash, dimension],
                         topic=weak["prompt"],
                         finding=f"同一问题的本次回答中，{own['name']}的{dimension}维度在{weak['platform']}与{strong['platform']}不同；保留两边原文及条件，不判断平台固有偏好。",
                         evidence=[ref] if ref else [],

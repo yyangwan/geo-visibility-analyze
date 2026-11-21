@@ -1,8 +1,9 @@
 """Descriptive, evidence-bound platform tasks; no inferred retrieval causality."""
 
-from collections import Counter
+from collections import Counter, defaultdict
 from urllib.parse import urlsplit
 
+from app.intelligence.answer_brands import answer_brand_mentions
 from app.intelligence.semantics import stable_hash
 
 DIAGNOSIS_VERSION = "platform-evidence-rules-1"
@@ -25,6 +26,9 @@ def platform_diagnoses(run, summary):
         groups.setdefault(group_id, []).append(response)
     result = []
     entities = {entity["id"]: entity for entity in summary["entities"]}
+    brand_mentions = defaultdict(list)
+    for mention in answer_brand_mentions(run.manifest, entities.values(), summary["mentions"]):
+        brand_mentions[mention["owner_id"]].append(mention)
     for group_id, responses in groups.items():
         response_ids = {response["id"] for response in responses}
         platform = responses[0]["platform"]
@@ -96,7 +100,8 @@ def platform_diagnoses(run, summary):
             )
         unresolved = [
             mention
-            for mention in mentions
+            for response in responses
+            for mention in brand_mentions[response["id"]]
             if entities[mention["entity_id"]]["identity_status"] == "provisional"
             or mention.get("identity_ambiguity")
         ]
@@ -104,8 +109,8 @@ def platform_diagnoses(run, summary):
             names = sorted({mention["entity_name"] for mention in unresolved})
             add(
                 "identity_review",
-                f"本组观察到 {len(names)} 个身份或片段归属未确认实体，包含：{'、'.join(names[:5])}。",
-                "逐条确认实体身份及同名歧义，再决定是否登记为对比品牌。",
+                f"本组回答正文有 {len(names)} 个品牌的身份或片段归属待确认，包含：{'、'.join(names[:5])}。",
+                "确认品牌身份及同名歧义，再决定是否登记为对比品牌。",
                 evidence_ids=[mention["id"] for mention in unresolved],
                 material=["企业/产品正式名称及原文上下文"],
             )

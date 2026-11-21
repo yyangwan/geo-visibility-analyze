@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0.0] - 2026-11-21
+
+### Added
+- Project brand comparisons and same-question platform evidence from a fixed analysis revision, reusing the audit scoring rules.
+- Link recommendation reasons to archived citation excerpts and keep all planned platform sample states visible.
+
+### Fixed
+- Exclude citation-only names, generic terms and ordinary product features from brand discovery and keep platform opportunities scoped to the version of the question.
+
 ## [1.3.2.0] - 2026-11-02
 
 ### Fixed

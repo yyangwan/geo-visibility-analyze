@@ -2,6 +2,7 @@
 
 from collections import Counter, defaultdict
 
+from app.intelligence.answer_brands import answer_brand_mentions, answer_prose
 from app.intelligence.brand_evaluation import (
     WEIGHTS,
     aggregate_scores,
@@ -43,6 +44,8 @@ def build_brand_presence(
     manifest, applications, entities, mentions, signals, evaluation
 ):
     registered = manifest.get("brand_targets", [])
+    body_mentions = list(answer_brand_mentions(manifest, entities, mentions))
+    body_entity_ids = {mention["entity_id"] for mention in body_mentions}
     entity_index = {
         entity["id"]: entity
         for entity in entities
@@ -96,7 +99,7 @@ def build_brand_presence(
             candidates = [
                 entity["id"]
                 for entity in entity_index.values()
-                if names.intersection(
+                if entity["id"] in body_entity_ids and names.intersection(
                     name.casefold()
                     for name in [entity["name"], *(entity.get("observed_names") or [])]
                 )
@@ -123,10 +126,10 @@ def build_brand_presence(
             )
         targets.append(target)
     for entity_id, entity in sorted(entity_index.items()):
-        if entity_id not in consumed:
+        if entity_id not in consumed and entity_id in body_entity_ids:
             if (entity.get("role", "unregistered") == "unregistered"
                 and entity.get("comparison_context_status") == "not_solution"):
-                continue  # Retained in all-subject/units views, not a competing solution.
+                continue
             targets.append(
                 {
                     "target_id": "entity:" + entity_id,
@@ -174,6 +177,10 @@ def build_brand_presence(
     by_sample = defaultdict(list)
     for response in manifest["responses"]:
         by_sample[response.get("sample_id") or response["id"]].append(response)
+    mentions_by_case = defaultdict(list)
+    for mention in body_mentions:
+        mentions_by_case[mention["owner_id"], mention["entity_id"]].append(mention)
+    bodies = {row["id"]: answer_prose(row["text"]) for row in manifest["responses"]}
     entity_scores = {
         (row["entity_id"], row["response_id"]): row
         for row in evaluation.get("answer_scores", [])
@@ -184,15 +191,7 @@ def build_brand_presence(
         for cell in cells:
             responses = by_sample[cell["sample_id"]]
             response = responses[0] if len(responses) == 1 else None
-            related = [
-                mention
-                for mention in mentions
-                if response
-                and mention["owner_kind"] == "answer"
-                and mention["owner_id"] == response["id"]
-                and target["entity_id"] is not None
-                and mention["entity_id"] == target["entity_id"]
-            ]
+            related = mentions_by_case[response["id"], target["entity_id"]] if response else []
             reasons = list(target["reason_codes"])
             if not response:
                 reasons.append(
@@ -222,7 +221,7 @@ def build_brand_presence(
                 evidence_ids = sorted({mention["id"] for mention in related})
             elif response and target_complete and identity_ok:
                 unmatched_name = any(
-                    name.casefold() in response["text"].casefold()
+                    name.casefold() in bodies[response["id"]].casefold()
                     for name in target["names"]
                 )
                 unmatched_signal = any(

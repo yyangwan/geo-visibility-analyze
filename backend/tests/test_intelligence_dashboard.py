@@ -112,7 +112,7 @@ async def test_collection_excludes_large_analysis_and_skips_metric_reconstructio
                     "analyzed_characters": 4567, "deferred_operations": ["x" * 100000]}
     target = {"target_id": "registry:own", "name": "Own", "role": "own", "identity_status": "confirmed"}
     run.summary = {"platforms": [{"platform": "summary_platform"}],
-                   "brand_presence": {"targets": [{**target, "names": ["unused"]}], "observations": ["x" * 1000000]},
+                   "brand_presence": {"targets": [{**target, "registry_brand_id": "own", "names": ["unused"]}], "observations": ["x" * 1000000]},
                    "diagnoses": ["x" * 1000000], "opportunities": {"items": ["x" * 1000000]}}
     state = AuditIntelligenceState(project_id="p1", audit_id=audit.id)
     db_session.add(state)

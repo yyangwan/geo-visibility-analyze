@@ -112,6 +112,7 @@ def test_platform_diagnoses_do_not_borrow_evidence_from_other_platforms():
                 {
                     "id": "r2",
                     "platform": "deepseek",
+                    "text": "新品牌提供可见度监测。",
                     "prompt_hash": "p",
                     "prompt": "哪个好",
                     "conditions": {},
@@ -141,7 +142,20 @@ def test_platform_diagnoses_do_not_borrow_evidence_from_other_platforms():
         },
     )
     summary = {
-        "entities": [{"id": "e", "identity_status": "provisional"}],
+        "entities": [
+            {
+                "id": "e",
+                "name": "新品牌",
+                "kind": "brand",
+                "identity_status": "provisional",
+            },
+            {
+                "id": "tool",
+                "name": "可见度监测",
+                "kind": "brand",
+                "identity_status": "provisional",
+            },
+        ],
         "mentions": [
             {
                 "id": "m2",
@@ -149,8 +163,22 @@ def test_platform_diagnoses_do_not_borrow_evidence_from_other_platforms():
                 "entity_name": "新品牌",
                 "owner_kind": "answer",
                 "owner_id": "r2",
+                "start": 0,
+                "end": 3,
+                "quote": "新品牌",
                 "sentiment": "negative",
-            }
+            },
+            {
+                "id": "m-tool",
+                "entity_id": "tool",
+                "entity_name": "可见度监测",
+                "owner_kind": "answer",
+                "owner_id": "r2",
+                "start": 5,
+                "end": 10,
+                "quote": "可见度监测",
+                "sentiment": "neutral",
+            },
         ],
         "claim_evidence": [
             {
@@ -172,6 +200,9 @@ def test_platform_diagnoses_do_not_borrow_evidence_from_other_platforms():
         "claim_review",
     }
     assert all(row["action"]["status"] == "proposed" for row in rows)
+    assert next(row for row in rows if row["kind"] == "identity_review")[
+        "evidence_ids"
+    ] == ["m2"]
 
 
 def test_unknown_capture_only_proposes_collection_not_brand_absence():

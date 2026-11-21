@@ -951,6 +951,28 @@ async def get_opportunities(
             "next_offset": offset + limit if offset + limit < len(filtered) else None}
 
 
+@router.get("/runs/{run_id}/comparison")
+async def get_comparison(
+    run_id: str,
+    mode: str = Query("brands", pattern=r"^(brands|platforms)$"),
+    own_target_id: str | None = Query(None, max_length=240),
+    comparison_target_id: str | None = Query(None, max_length=240),
+    platform: str | None = Query(None, max_length=50),
+    scenario: str | None = Query(None, max_length=40),
+    question_id: str | None = Query(None, pattern=r"^(?:[a-f0-9]{32}|[a-f0-9]{64})$"),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.intelligence.comparison_workspace import project_comparison
+
+    run = await action_run(db, user, run_id)
+    reviews = await review_snapshot(db, run.project_id, run.id) if mode == "platforms" else None
+    return project_comparison(
+        run, mode=mode, own=own_target_id, other=comparison_target_id,
+        platform=platform, scenario=scenario, question_id=question_id, reviews=reviews,
+    )
+
+
 @router.post("/runs/{run_id}/identity-decisions", status_code=202)
 async def review_identity(
     run_id: str,
@@ -1318,12 +1340,22 @@ def require_writer(user: dict):
 
 
 def view(run):
+    from app.intelligence.answer_brands import (
+        discovered_brands,
+        restrict_brand_presence,
+    )
     from app.intelligence.brand_presence import build_brand_presence
     from app.intelligence.readiness import result_readiness
 
     summary = dict(run.summary or {})
+    if "answer_brands" not in summary:
+        summary["answer_brands"] = discovered_brands(run.manifest, summary)
     if "brand_presence" not in summary:
         summary["brand_presence"] = build_brand_presence(run.manifest, [], [], [], {}, {})
+    else:
+        summary["brand_presence"] = restrict_brand_presence(
+            summary["brand_presence"], summary["answer_brands"]
+        )
     return {
         "id": run.id,
         "audit_id": str(run.audit_id),
@@ -1387,6 +1419,7 @@ async def audit_visibility_score(
                 IntelligenceRun.id,
                 IntelligenceRun.summary["visibility_score"].label("scoring"),
                 IntelligenceRun.summary["opportunities"]["items"].label("opportunities"),
+                IntelligenceRun.summary["answer_brands"].label("answer_brands"),
             )
             .join(
                 AuditIntelligenceState,
@@ -1398,6 +1431,24 @@ async def audit_visibility_score(
         )
     ).one_or_none()
     if published and published.scoring:
+        brands = published.answer_brands
+        if brands is None:
+            from app.intelligence.answer_brands import discovered_brands
+
+            legacy = (
+                await db.execute(
+                    select(
+                        IntelligenceRun.manifest["responses"].label("responses"),
+                        IntelligenceRun.manifest["brand_targets"].label("brand_targets"),
+                        IntelligenceRun.summary["entities"].label("entities"),
+                        IntelligenceRun.summary["mentions"].label("mentions"),
+                    ).where(IntelligenceRun.id == published.id, IntelligenceRun.project_id == audit.project_id)
+                )
+            ).one()
+            brands = discovered_brands(
+                {"responses": legacy.responses or [], "brand_targets": legacy.brand_targets or []},
+                {"entities": legacy.entities or [], "mentions": legacy.mentions or []},
+            )
         return {
             "audit_id": str(audit_id),
             "run_id": published.id,
@@ -1409,6 +1460,7 @@ async def audit_visibility_score(
                 platform=platform,
                 scenario=scenario,
                 opportunities=published.opportunities or (),
+                body_entity_ids={row["id"] for row in brands},
             ),
         }
 

@@ -820,6 +820,7 @@ async def build_summary(db, run):
                 ),
                 "observed_entity_id": entity.id,
                 "observed_entity_name": entity.name,
+                "observed_entity_kind": entity.kind,
                 "segment_id": segment.id,
                 "owner_kind": segment.owner_kind,
                 "owner_id": segment.owner_id,
@@ -1018,8 +1019,13 @@ async def build_summary(db, run):
             },
         )
         group["sample_count"] += 1
+    from app.intelligence.answer_brands import answer_brand_mentions, discovered_brands
+
+    brand_mentions = list(answer_brand_mentions(manifest, entities, evidence))
     summary = {
-        "brand_signals": summarize_brand_signals(applications, response_map, evidence, context_analysis),
+        "brand_signals": summarize_brand_signals(
+            applications, response_map, brand_mentions, context_analysis, brand_mentions_only=True
+        ),
         "information_units": project_units(applications),
         "context_analysis": context_analysis,
         "entities": entities,
@@ -1033,10 +1039,11 @@ async def build_summary(db, run):
         "diagnoses": diagnoses,
         "identity_note": "同名实体仅作候选分组，未经身份确认，不自动登记为竞品。",
     }
+    summary["answer_brands"] = discovered_brands(manifest, summary)
     from app.intelligence.diagnosis import platform_diagnoses
 
     summary["brand_evaluation"] = summarize_answer_scores(
-        manifest, applications, entities, evidence, summary["brand_signals"]
+        manifest, applications, summary["answer_brands"], brand_mentions, summary["brand_signals"]
     )
     from app.intelligence.brand_presence import build_brand_presence
 

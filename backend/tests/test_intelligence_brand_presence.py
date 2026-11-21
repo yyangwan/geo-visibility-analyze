@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.intelligence.answer_brands import discovered_brands
 from app.intelligence.brand_evaluation import freeze_cohort, summarize_answer_scores
 from app.intelligence.brand_presence import (
     build_brand_presence,
@@ -178,7 +179,7 @@ def test_registry_name_not_extracted_is_unknown_instead_of_proven_absence():
     )
 
 
-def test_source_only_confirmed_entity_does_not_increase_answer_presence():
+def test_source_only_confirmed_entity_is_not_a_discovered_brand():
     manifest, applications = fixture()
     entity = {
         "id": "found",
@@ -194,17 +195,7 @@ def test_source_only_confirmed_entity_does_not_increase_answer_presence():
         "owner_id": "article",
     }
     result = projection(manifest, applications, entities=[entity], mentions=[mention])
-    target = next(row for row in result["targets"] if row["entity_id"] == "found")
-    assert target["source_mentions"] == 1
-    assert target["presence_counts"] == {"observed_absent": 1}
-    assert (
-        next(
-            row
-            for row in result["observations"]
-            if row["target_id"] == target["target_id"]
-        )["evidence_ids"]
-        == []
-    )
+    assert [row["target_id"] for row in result["targets"]] == ["registry:own"]
 
 
 def test_unknown_platform_keeps_its_weight_and_does_not_lower_a_missing_total():
@@ -231,7 +222,23 @@ def test_name_similarity_requires_binding_and_does_not_register_a_discovery():
         "identity_status": "confirmed",
         "role": "unregistered",
     }
-    result = projection(manifest, applications, entities=[entity])
+    result = projection(
+        manifest,
+        applications,
+        entities=[entity],
+        mentions=[
+            {
+                "id": "answer-brand",
+                "identity_ambiguity": False,
+                "entity_id": "candidate",
+                "owner_kind": "answer",
+                "owner_id": "qwen",
+                "start": 0,
+                "end": 2,
+                "quote": "云衡",
+            }
+        ],
+    )
     assert len(result["targets"]) == 2
     assert result["targets"][0]["entity_id"] is None
     assert result["targets"][0]["reason_codes"] == ["registered_binding_required"]
@@ -250,6 +257,9 @@ def test_unrelated_ambiguous_entity_does_not_block_an_identified_brand():
             "owner_kind": "answer",
             "owner_id": "qwen",
             "identity_ambiguity": False,
+            "start": 0,
+            "end": 2,
+            "quote": "拓域",
         },
         {
             "id": "ambiguous-mention",
@@ -278,6 +288,62 @@ def test_unrelated_ambiguous_entity_does_not_block_an_identified_brand():
     assert row["state"] == "present"
     assert row["dimensions"]["presence"] == 100
     assert row["dimensions"]["reasons"] == 75
+
+
+def test_discovery_requires_literal_answer_body_brand_and_counts_each_answer_once():
+    text = (
+        "锐川支持盘点，锐川也支持导出。GEO、外贸旗舰版和云管盒参与比较。\n"
+        "- 来源：行业媒体\n明禾也支持盘点。Semrush Toolkit 提供搜索监测。\n## 参考来源\n《资料商》"
+    )
+    manifest, applications = fixture(text=text)
+    named = [
+        ("real", "锐川", "brand"),
+        ("topic", "GEO", "brand"),
+        ("edition", "外贸旗舰版", "brand"),
+        ("product", "云管盒", "product"),
+        ("inline_source", "行业媒体", "brand"),
+        ("after_inline_source", "明禾", "brand"),
+        ("branded_tool", "Semrush Toolkit", "brand"),
+        ("tool_brand", "Semrush", "brand"),
+        ("source", "资料商", "brand"),
+        ("snapshot", "另一品牌", "brand"),
+    ]
+    entities = [
+        {"id": key, "name": name, "kind": kind, "identity_status": "provisional"}
+        for key, name, kind in named
+    ]
+    mentions = []
+    for key, name, _ in named:
+        offset = text.find(name)
+        mentions.append(
+            {
+                "id": key,
+                "entity_id": key,
+                "owner_id": "qwen",
+                "owner_kind": "snapshot" if key == "snapshot" else "answer",
+                "start": offset,
+                "end": offset + len(name),
+                "quote": name,
+                "identity_ambiguity": False,
+            }
+        )
+    mentions.append({**mentions[0], "id": "again", "start": 7, "end": 9})
+    brands = discovered_brands(manifest, {"entities": entities, "mentions": mentions})
+    assert [
+        (row["name"], row["response_count"], row["platform_response_counts"])
+        for row in brands
+    ] == [
+        ("锐川", 1, {"qwen": 1}),
+        ("明禾", 1, {"qwen": 1}),
+        ("Semrush", 1, {"qwen": 1}),
+    ]
+    presence = projection(manifest, applications, entities=entities, mentions=mentions)
+    assert {row["target_id"] for row in presence["targets"]} == {
+        "registry:own",
+        "entity:real",
+        "entity:after_inline_source",
+        "entity:tool_brand",
+    }
 
 
 def test_readiness_keeps_source_uncertainty_separate_from_valid_answer_scoring():

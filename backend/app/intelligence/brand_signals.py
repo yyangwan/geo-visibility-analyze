@@ -5,7 +5,9 @@ from app.intelligence.semantics import stable_hash
 BRAND_SIGNAL_VERSION = "brand-signals-v1"
 
 
-def summarize_brand_signals(applications, responses, mentions, context_analysis=None):
+def summarize_brand_signals(
+    applications, responses, mentions, context_analysis=None, *, brand_mentions_only=False
+):
     observations = []
     expected, extracted, rejected = 0, 0, 0
     for application, segment, cache in applications:
@@ -32,6 +34,8 @@ def summarize_brand_signals(applications, responses, mentions, context_analysis=
                 and not mention["identity_ambiguity"]
             ]
             entity_ids = sorted({mention["entity_id"] for mention in matched})
+            if brand_mentions_only and not entity_ids:
+                continue
             requirement_evidence = []
             if context_analysis is not None:
                 from app.intelligence.information_units import local_units
