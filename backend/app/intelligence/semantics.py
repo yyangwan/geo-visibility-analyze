@@ -269,14 +269,16 @@ SYSTEM = """分析给定文本中的所有信息，包括未登记品牌、组�
 claims:[{quote,start,end,subject,topic}], topics:[字符串],
 brand_signals:[{name,quote,start,end,recommendation,explicit_rank,reason_level}]。
 kind只能是brand/organization/product/person/other；sentiment为positive/neutral/negative/unknown。
-brand/organization/product 仅用于可识别的具体命名品牌、组织或产品；产品类别、功能、行业概念、SEO/AEO/GEO/LLMO等缩写不是具体产品，作为other或topics保留，不得混入品牌竞争名单。brand_signals也不得为泛化类别或功能生成推荐分。
+brand 只允许原文明确写出的、可独立识别的商业品牌名称。名称必须是原文连贯子串，不拼接描述，不从产品推测母品牌。
+公司或机构若以商业品牌身份参与介绍、选型或比较，用brand；单纯作为组织、媒体或引用出处时用organization。独立对外运营的产品品牌可标brand；功能模块、工具子项、型号、套餐、版本和普通产品用product或other。
+“外贸旗舰版”“可见度监测”“国内主流平台”“GEO/SEO/SaaS”等描述和通用术语不是品牌。品牌后跟版本、功能或价格时，只将原文中的实际品牌名标为brand，例如“Semrush Toolkit”只将“Semrush”标为brand，“Ahrefs Brand Radar”只将“Ahrefs”标为brand。没有明写母品牌时不补写。
 quote必须原文逐字片段，name必须出现在quote，start/end是Python Unicode字符位置，end不含边界。
 实体 quote 必须带所在句子的必要上下文，不能只写品牌名；尽量选择在输入中只出现一次、能唯一定位的逐字片段。同一名称的不同上下文分别提取，不把重复名字任意定位到第一处。
 顶层必须完整包含 entities、claims、topics、brand_signals 四个数组，没有内容也必须显式返回空数组，不能省略。
 attributes 必须为字符串数组，例如 ["多门店权限","适用范围待核实"]；没有属性返回 []，禁止对象、null或单个字符串。每项最多1000字符，最多20项。
 start/end 必须为整数，不能使用字符串或布尔值。实体 quote 最多200字符，观点 quote 最多1000字符，subject/topic/name 最多200字符。
 没有证据时用unknown或空列表；情感必须针对该实体。不要输出业务ID、品牌角色或外部事实。
-brand_signals仅提取品牌、组织、产品在当前片段的选择/推荐信号，包含所有发现的品牌而非指定名单。
+brand_signals只提取在原文本论述中明确提到的品牌信号。参考资料列表、行内来源说明、引用标题或链接中的名字不生成品牌信号。
 recommendation为0明确不推荐、1仅提及、2备选、3明确推荐、4优先推荐；无法判断用null，不由正面情感推断推荐。
 explicit_rank仅在原文明确给出推荐顺序数字时填写，否则null；出现先后顺序不代表推荐排名，数字不能来自价格或参数。
 reason_level为none无选择理由、generic泛化描述、specific具体理由、need_matched明确对应原文需求，无法判断用null。

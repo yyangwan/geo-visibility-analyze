@@ -6,6 +6,11 @@ from fractions import Fraction
 from fastapi import HTTPException
 
 from app.intelligence.analysis_coverage import answer_coverage, related_span_defects
+from app.intelligence.answer_brands import (
+    answer_brand_mentions,
+    answer_prose,
+    brand_target_visible,
+)
 from app.intelligence.brand_ranking import declares_ranking, verified_ranking
 from app.intelligence.competitive_comparison import TASKS
 from app.intelligence.question_context import literal_matches
@@ -77,25 +82,9 @@ def score_targets(presence, entities, answer_mentions):
                 answer_names[mention["entity_id"]].add(
                     mention["observed_entity_name"].casefold()
                 )
-    targets = list(presence["targets"])
-    represented = {target.get("entity_id") for target in targets}
-    for entity in entities:
-        if (
-            entity["id"] not in represented
-            and entity.get("source_mentions")
-            and entity["kind"] in ("brand", "organization", "product")
-        ):
-            targets.append(
-                {
-                    "target_id": f"entity:{entity['id']}",
-                    "entity_id": entity["id"],
-                    "name": entity["name"],
-                    "names": [entity["name"], *entity.get("observed_names", [])],
-                    "role": "unregistered",
-                    "identity_status": entity["identity_status"],
-                    "source_mentions": entity["source_mentions"],
-                }
-            )
+    targets = [
+        row for row in presence["targets"] if brand_target_visible(row, answer_entity_ids)
+    ]
     registry_names = set().union(
         *(
             observed_names(target)
@@ -105,8 +94,8 @@ def score_targets(presence, entities, answer_mentions):
     )
     identities_by_name = defaultdict(set)
     for entity in entities:
-        if entity.get("source_mentions") and entity["id"] not in answer_entity_ids:
-            continue  # A source-only entity cannot make an answer name ambiguous.
+        if entity["id"] not in answer_entity_ids:
+            continue
         for name in {entity["name"], *entity.get("observed_names", [])}:
             identities_by_name[name.casefold()].add(entity["id"])
 
@@ -155,12 +144,6 @@ def score_targets(presence, entities, answer_mentions):
                 method = "unresolved"
         if entity.get("role_conflict"):
             method = "unresolved"
-        if (
-            not target.get("registry_brand_id")
-            and target.get("source_mentions")
-            and not answer_names[entity_id]
-        ):
-            method = "source_only"
         result.append(
             {
                 **{
@@ -234,8 +217,6 @@ def sample_observation(
         return {"reason": "answer_incomplete"}
     if not proof["input_processed"]:
         return {"reason": "analysis_incomplete"}
-    if target["identity_method"] == "source_only":
-        return {"reason": "brand_observed_only_in_sources"}
     if target["identity_method"] == "unresolved":
         return {"reason": "identity_unresolved"}
     if related_span_defects(proof, target["names"]):
@@ -256,7 +237,8 @@ def sample_observation(
     ):
         return {"reason": "identity_unresolved"}
     if not matched:
-        if any(literal_matches(response["text"], name) for name in names):
+        body = answer_prose(response["text"])
+        if any(literal_matches(body, name) for name in names):
             return {"reason": "identity_unresolved"}
         return {
             "dimensions": dict.fromkeys(WEIGHTS, 0),
@@ -358,9 +340,8 @@ def build_visibility_score(manifest, applications, summary):
         defaultdict(list),
         defaultdict(list),
     )
-    for item in summary["mentions"]:
-        if item["owner_kind"] == "answer":
-            answer_mentions[item["owner_id"]].append(item)
+    for item in answer_brand_mentions(manifest, summary["entities"], summary["mentions"]):
+        answer_mentions[item["owner_id"]].append(item)
     for row in summary["brand_signals"]["observations"]:
         signals[row["response_id"]].append(row)
     sources = manifest.get("sources", [])
@@ -653,8 +634,12 @@ def score_projection(
     platform=None,
     scenario=None,
     opportunities=(),
+    body_entity_ids=None,
 ):
-    targets = {row["target_id"]: row for row in payload["targets"]}
+    targets = {
+        row["target_id"]: row for row in payload["targets"]
+        if body_entity_ids is None or brand_target_visible(row, body_entity_ids)
+    }
     own = [row for row in targets.values() if row["role"] == "own"]
     if own_target_id is None and own:
         own_target_id = own[0]["target_id"]

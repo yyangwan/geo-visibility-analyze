@@ -149,6 +149,15 @@ async def test_v4_waits_for_source_then_freezes_one_run(
     assert (
         await client.get(f"{base}/visibility-score?own_target_id=registry:other")
     ).status_code == 404
+    comparison_url = f"/api/intelligence/runs/{analysis.run_id}/comparison?mode=platforms"
+    comparison = await client.get(comparison_url)
+    assert comparison.status_code == 200, comparison.text
+    workspace = comparison.json()
+    assert workspace["run_id"] == analysis.run_id
+    assert {row["status"] for row in workspace["detail"]["samples"]} == {"received", "failed"}
+    captured = next(row for row in workspace["detail"]["samples"] if row["status"] == "received")
+    assert captured["sources"][0]["frozen"]
+    assert "surface" not in captured
     await db_session.commit()
     next_audit_id = await start_audit(client, db_session, key="workbench-next-audit")
     workbench_url = "/api/intelligence/projects/p1/workbench-audit"
@@ -168,6 +177,7 @@ async def test_v4_waits_for_source_then_freezes_one_run(
     writer["pid"] = "another-project"
     assert (await client.get(f"{base}/visibility-score")).status_code == 403
     assert (await client.get(workbench_url)).status_code == 403
+    assert (await client.get(comparison_url)).status_code == 404
     assert progress["poll_after_ms"] is None
 
 

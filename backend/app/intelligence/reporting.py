@@ -5,6 +5,7 @@ from collections import Counter
 from sqlalchemy import select
 
 from app.intelligence.actions import run_is_current
+from app.intelligence.answer_brands import brand_target_visible, discovered_brands
 from app.intelligence.measurement import run_snapshot
 from app.intelligence.models import AuditIntelligenceState, IntelligenceRun
 from app.intelligence.reviews import review_snapshot
@@ -31,7 +32,9 @@ def metric_population(responses, observed, *, answer=False):
 
 
 def project_report(run, snapshot, fresh, reviews, *, include_details=True):
-    entities = run.summary.get("entities", [])
+    entities = run.summary.get("answer_brands")
+    if entities is None:
+        entities = discovered_brands(run.manifest, run.summary)
     platforms = []
     for platform in sorted({row["platform"] for row in snapshot["responses"]}):
         responses = [r for r in snapshot["responses"] if r["platform"] == platform]
@@ -84,6 +87,7 @@ def project_report(run, snapshot, fresh, reviews, *, include_details=True):
             run.summary["visibility_score"], opportunities=(
                 run.summary.get("opportunities") or {}
             ).get("items", []),
+            body_entity_ids={row["id"] for row in entities},
         )
     if not include_details:
         return report
@@ -165,8 +169,14 @@ async def audit_report(db, audit, *, include_measurements=True, include_details=
         # The capture page needs counters and selector options, not scoring matrices,
         # diagnoses, source evidence or the expensive verified metric populations.
         targets = (run.summary.get("brand_presence") or {}).get("targets")
+        brands = run.summary.get("answer_brands")
+        if brands is None:
+            brands = discovered_brands(run.manifest, run.summary)
         if targets is None:
-            targets = [{**row, "target_id": "entity:" + row["id"]} for row in run.summary.get("entities", [])]
+            targets = [{**row, "target_id": "entity:" + row["id"]} for row in brands]
+        else:
+            entity_ids = {row["id"] for row in brands}
+            targets = [row for row in targets if brand_target_visible(row, entity_ids)]
         return {
             **result,
             "status": run.status if fresh else "stale",

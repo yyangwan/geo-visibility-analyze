@@ -11,7 +11,7 @@ from app.main import app
 from tests.test_intelligence_foundation import fixture_audit
 
 
-def test_report_uses_independent_source_population_and_all_entities():
+def test_report_uses_independent_source_population_for_answer_brands():
     responses = [
         {"id": "r1", "platform": "qwen", "answer_status": "complete"},
         {"id": "r2", "platform": "qwen", "answer_status": "partial"},
@@ -23,9 +23,35 @@ def test_report_uses_independent_source_population_and_all_entities():
         status="partial",
         finished_at=None,
         coverage={},
-        manifest={"sources": []},
+        manifest={
+            "sources": [],
+            "responses": [{**row, "text": "推荐未登记品牌"} for row in responses],
+        },
         summary={
-            "entities": [{"id": "other", "name": "未登记品牌", "role": "unregistered"}]
+            "entities": [
+                {
+                    "id": "other",
+                    "name": "未登记品牌",
+                    "role": "unregistered",
+                    "kind": "brand",
+                },
+                {
+                    "id": "citation-only",
+                    "name": "引用品牌",
+                    "role": "unregistered",
+                    "kind": "brand",
+                },
+            ],
+            "mentions": [
+                {
+                    "entity_id": "other",
+                    "owner_kind": "answer",
+                    "owner_id": "r1",
+                    "start": 2,
+                    "end": 7,
+                    "quote": "未登记品牌",
+                }
+            ],
         },
     )
     snapshot = {
@@ -53,7 +79,7 @@ def test_report_uses_independent_source_population_and_all_entities():
     assert archive["excluded"] == [
         {"response_id": "r1", "reason": "cited_archive_incomplete"}
     ]
-    assert report["entities"][0]["role"] == "unregistered"
+    assert [row["name"] for row in report["entities"]] == ["未登记品牌"]
     assert project_report(run, snapshot, False, {})["status"] == "stale"
 
 
@@ -137,7 +163,9 @@ async def test_saved_run_reports_verified_sources_even_when_context_is_stale(
 
 
 @pytest.mark.asyncio
-async def test_latest_report_keeps_large_json_out_of_sort_and_reads_reviews_once(db_session):
+async def test_latest_report_keeps_large_json_out_of_sort_and_reads_reviews_once(
+    db_session,
+):
     from sqlalchemy import event
 
     audit = await fixture_audit(db_session)
@@ -157,15 +185,25 @@ async def test_latest_report_keeps_large_json_out_of_sort_and_reads_reviews_once
     finally:
         event.remove(engine, "before_cursor_execute", record)
     assert report["run_id"] == run.id
-    sorted_runs = [sql for sql in statements if "from intelligence_runs" in sql and "order by" in sql]
+    sorted_runs = [
+        sql
+        for sql in statements
+        if "from intelligence_runs" in sql and "order by" in sql
+    ]
     assert sorted_runs
-    assert all("intelligence_runs.manifest" not in sql and "intelligence_runs.summary" not in sql for sql in sorted_runs)
+    assert all(
+        "intelligence_runs.manifest" not in sql
+        and "intelligence_runs.summary" not in sql
+        for sql in sorted_runs
+    )
     assert sum("from intelligence_claim_reviews" in sql for sql in statements) == 1
     assert not any("from intelligence_brand_facts" in sql for sql in statements)
 
 
 @pytest.mark.asyncio
-async def test_dashboard_matches_report_without_loading_unused_reviews(db_session, monkeypatch):
+async def test_dashboard_matches_report_without_loading_unused_reviews(
+    db_session, monkeypatch
+):
     from sqlalchemy import event
 
     from app.intelligence.dashboard import project_dashboard
@@ -188,8 +226,16 @@ async def test_dashboard_matches_report_without_loading_unused_reviews(db_sessio
         overview = (await project_dashboard(db_session, "p1"))["report"]
     finally:
         event.remove(engine, "before_cursor_execute", record)
-    assert overview == {key: value for key, value in full.items() if key not in ("sources", "evidence", "responses", "source_states")}
-    assert not any("from intelligence_claim_reviews" in sql or "from intelligence_brand_facts" in sql for sql in statements)
+    assert overview == {
+        key: value
+        for key, value in full.items()
+        if key not in ("sources", "evidence", "responses", "source_states")
+    }
+    assert not any(
+        "from intelligence_claim_reviews" in sql
+        or "from intelligence_brand_facts" in sql
+        for sql in statements
+    )
 
 
 @pytest.mark.asyncio
@@ -202,7 +248,15 @@ async def test_capture_poll_does_not_load_analysis_bodies(db_session):
     audit = await fixture_audit(db_session)
     run = await prepare_run(db_session, "p1", audit.id)
     run.status, run.coverage = "partial", {"semantic_error_count": 2}
-    db_session.add(SamplingAudit(project_id="p1", audit_id=audit.id, idempotency_key="capture-poll", request_hash="f" * 64, expected_samples=1))
+    db_session.add(
+        SamplingAudit(
+            project_id="p1",
+            audit_id=audit.id,
+            idempotency_key="capture-poll",
+            request_hash="f" * 64,
+            expected_samples=1,
+        )
+    )
     await db_session.flush()
     statements = []
 
@@ -212,8 +266,15 @@ async def test_capture_poll_does_not_load_analysis_bodies(db_session):
     engine = db_session.bind.sync_engine
     event.listen(engine, "before_cursor_execute", record)
     try:
-        status = await capture_status(audit.id, {"scope": "project", "pid": "p1", "role": "viewer"}, db_session)
+        status = await capture_status(
+            audit.id, {"scope": "project", "pid": "p1", "role": "viewer"}, db_session
+        )
     finally:
         event.remove(engine, "before_cursor_execute", record)
-    assert status["analysis_status"] == "partial" and status["semantic_error_count"] == 2
-    assert not any("intelligence_runs.manifest" in sql or "intelligence_runs.summary" in sql for sql in statements)
+    assert (
+        status["analysis_status"] == "partial" and status["semantic_error_count"] == 2
+    )
+    assert not any(
+        "intelligence_runs.manifest" in sql or "intelligence_runs.summary" in sql
+        for sql in statements
+    )
