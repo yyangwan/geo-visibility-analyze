@@ -16,6 +16,7 @@ async def test_generate_prompts_prioritizes_product_context_without_brand_names(
         product_keywords=["新手", "易清洁", "稳定出品"],
         brand_names=["Alpha", "V60"],
         count=6,
+        use_real_queries=False,
     )
 
     assert len(prompts) == 6
