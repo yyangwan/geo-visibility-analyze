@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.4.0.1] - 2026-11-26
+
+### Fixed
+- Keep audit analysis running when archived citation text contains a PostgreSQL-incompatible NUL, preserving original archive contents and evidence offsets.
+
 ## [1.4.0.0] - 2026-11-21
 
 ### Added

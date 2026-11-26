@@ -24,6 +24,8 @@ def stable_hash(value) -> str:
 def chunks(text: str, size: int = 900) -> list[dict]:
     if size < 100:
         raise ValueError("Chunk size too small")
+    # PostgreSQL text rejects NUL. Replace it without shifting offsets into the archived text.
+    text = text.replace("\x00", "\uFFFD")
     result, offset = [], 0
     while offset < len(text):
         end = min(offset + size, len(text))
