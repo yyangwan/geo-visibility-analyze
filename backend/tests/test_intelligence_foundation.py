@@ -59,6 +59,19 @@ def test_full_unicode_chunks_cover_tail_exactly():
         assert text[chunk["start"] : chunk["end"]] == chunk["text"]
 
 
+def test_chunks_replace_postgres_incompatible_nul_without_shifting_evidence():
+    text = "正文😀" * 50 + "\x00" + "尾部证据。" * 50
+    expected = text.replace("\x00", "\uFFFD")
+    segments = chunks(text, size=100)
+
+    assert "".join(segment["text"] for segment in segments) == expected
+    assert segments[-1]["end"] == len(text)
+    for segment in segments:
+        start, end = segment["start"], segment["end"]
+        assert segment["text"] == expected[start:end]
+    assert text.index("尾部证据") == expected.index("尾部证据")
+
+
 def test_model_quotes_cannot_fabricate_entities():
     result = checked_result(
         "原文只有云衡",
