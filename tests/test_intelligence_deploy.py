@@ -234,7 +234,7 @@ def test_workflow_and_production_overlay_enforce_release_contract():
     assert set(workflow["on"]) == {"workflow_dispatch"}
     assert workflow["jobs"]["deploy"]["if"] == "github.ref == 'refs/heads/main'"
     commands = "\n".join(step.get("run", "") for step in workflow["jobs"]["deploy"]["steps"])
-    for required in ['git rev-parse origin/main', '--workflow backend-ci.yml', '--event push', '--status success', 'git pull --ff-only origin main', 'docker save "$IMAGE" | gzip -1 | ssh', 'ServerAliveInterval=30']:
+    for required in ['git rev-parse origin/main', '--workflow backend-ci.yml', '--branch main --commit "$RELEASE_SHA" --status success', 'select(.event == "push" or .event == "workflow_dispatch")', 'git pull --ff-only origin main', 'docker save "$IMAGE" | gzip -1 | ssh', 'ServerAliveInterval=30']:
         assert required in commands
     overlay = yaml.safe_load((ROOT / "compose.intelligence-production.yml").read_text(encoding="utf-8"))
     for service in ["api", "worker"]:
@@ -242,3 +242,17 @@ def test_workflow_and_production_overlay_enforce_release_contract():
         assert overlay["services"][service]["mem_limit"] == "640m"
         assert overlay["services"][service]["cpus"] == 0.75
     assert overlay["networks"]["default"] == {"external": True, "name": "geo-visibility-analyze_default"}
+
+
+def test_manual_build_uses_the_same_verified_main_image_pipeline():
+    workflow = yaml.load((ROOT / ".github/workflows/backend-ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["release_sha"]["required"] == "true"
+    jobs = workflow["jobs"]
+    gate = next(step for step in jobs["source"]["steps"] if step.get("name") == "Verify manual build targets the current main revision")
+    assert gate["if"] == "github.event_name == 'workflow_dispatch'"
+    assert 'test "$GITHUB_REF" = \'refs/heads/main\'' in gate["run"]
+    assert 'test "$GITHUB_SHA" = "$RELEASE_SHA"' in gate["run"]
+    assert 'git ls-remote origin refs/heads/main' in gate["run"]
+    assert jobs["container"]["needs"] == "source"
+    publish = next(step for step in jobs["container"]["steps"] if step.get("name") == "Publish verified SHA image")
+    assert publish["if"] == "github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"

@@ -8,6 +8,8 @@
 
 同一镜像经过检查后，只有 `main` 的 workflow 才发布 `ghcr.io/yyangwan/geo-visibility-analyze:<完整提交 SHA>`。PR 不推送镜像。镜像记录 `org.opencontainers.image.revision`；部署时核对该标签和目标 SHA，不使用 `latest`。该 workflow 暂不自动部署或迁移数据库。
 
+如果合入后 GitHub 未启动主分支镜像流程，可在 `Backend source and worker` 中选择 `main` 并传入当前主分支的完整 `release_sha`。这条入口执行相同的源码检查、数据库验证、全量回归及镜像验收。只有目标提交仍是主分支当前版本时才能通过手动构建的入口校验，生产切换仍需独立执行。
+
 已授权的正式生产切换使用单独手动流程，见 [生产部署与回退](citation-intelligence-production-deploy.md)。它要求当前 main 的成功镜像发布、固定新库及私密配置，先验证候选 API/worker，最后切换独立内部入口。
 
 ## 独立联调环境

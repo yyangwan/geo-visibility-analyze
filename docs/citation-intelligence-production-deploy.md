@@ -9,7 +9,7 @@
 - v3 专用新库名称固定为 `intelligence_value_20261030`，运行配置为 `/opt/geo-visibility-analyze/.intelligence-value.env`。原 `/opt/geo-visibility-analyze/.intelligence.env` 保留给前一版本，不改写其旧库指向。两份文件权限均为 `600`，数据库、认证、模型和设备参数只在服务器配置，不提交、复制到镜像或上传 Actions。
 - 必须显式设置 `AISCOPE_DEBUG=0`，关闭开发注册、登录和 `local.*` 假身份；缺省或任何其他值均不能通过部署检查。生产启用 `AISCOPE_INTELLIGENCE_ENABLED=true`、`AISCOPE_INTELLIGENCE_ENVIRONMENT=production`、`AISCOPE_INTELLIGENCE_BLOB_BACKEND=oss`，使用已验证的 ECS RAM 角色及同地域私有 OSS。
 - Docker 外部网络 `geo-visibility-analyze_default` 必须已存在，新库需能从该网络访问。
-- 使用当前 main 完整 SHA 且成功运行 `Backend source and worker` 的 main push 工作流。发布镜像为 `ghcr.io/yyangwan/geo-visibility-analyze:<SHA>`，不使用 `latest`。
+- 使用当前 main 完整 SHA，并确认 `Backend source and worker` 在该提交上完成主分支推送构建或手动重试。发布镜像为 `ghcr.io/yyangwan/geo-visibility-analyze:<SHA>`，不使用 `latest`。
 - 后端仓库临时配置 `CITATION_STORAGE_HOST`、`CITATION_STORAGE_USER`、`CITATION_STORAGE_SSH_KEY`、`CITATION_STORAGE_KNOWN_HOSTS`。专用 SSH 身份需能执行此已落库部署流程；之前仅允许存储探针的受限身份不能直接用于切换。完成后撤销临时凭据。
 
 ## 手动部署
