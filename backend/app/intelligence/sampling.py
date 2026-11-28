@@ -256,6 +256,9 @@ async def accept_capture(db, task, lease_token: str, result: dict):
     if attempt is None:
         raise HTTPException(409, "Capture attempt binding missing")
     payload = capture.model_dump(mode="json", by_alias=True)
+    for source in payload["sources"]:
+        if source.get("resolutionReason") is None:
+            source.pop("resolutionReason", None)
     accepted_hash = stable_hash(payload)
     token_hash = digest(lease_token.encode())
     if attempt.accepted_hash:

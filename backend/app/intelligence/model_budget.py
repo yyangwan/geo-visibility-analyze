@@ -132,7 +132,7 @@ def budget_status(ledger):
     }
 
 
-def reserve(ledger, policy, phase, estimated_tokens, subject_id):
+def reserve(ledger, policy, phase, estimated_tokens, subject_id, *, use_remaining_budget=False):
     if phase not in SHARES or type(estimated_tokens) is not int or estimated_tokens < 1:
         raise ValueError("Invalid reservation")
     current = (
@@ -142,14 +142,15 @@ def reserve(ledger, policy, phase, estimated_tokens, subject_id):
         raise ValueError("Frozen budget changed")
     status = budget_status(current)
     scoped = status["phases"][phase]
+    final_verification = use_remaining_budget and phase == "verification"
     if (
         status["requests"] >= policy["requests"]
-        or scoped["requests"] >= scoped["request_limit"]
+        or (not final_verification and scoped["requests"] >= scoped["request_limit"])
     ):
         return current, None, "phase_request_limit"
     if (
         status["charged_tokens"] + estimated_tokens > policy["tokens"]
-        or scoped["charged_tokens"] + estimated_tokens > scoped["token_limit"]
+        or (not final_verification and scoped["charged_tokens"] + estimated_tokens > scoped["token_limit"])
     ):
         return current, None, "phase_token_limit"
     receipt = uuid4().hex

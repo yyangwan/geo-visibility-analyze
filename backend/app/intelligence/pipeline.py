@@ -44,9 +44,18 @@ from app.intelligence.semantics import (
     safe_validation_fields,
     stable_hash,
 )
+from app.intelligence.source_media import (
+    discover_media,
+    save_media_previews,
+    source_page_type,
+)
 from app.intelligence.source_quality import assess_text, usable_snapshot
 from app.intelligence.sources import SourceBlocked, SourceUnavailable, capture_source
 from app.utils.timezone import utcnow
+
+
+async def capture_citation_page(url, byte_limit):
+    return await capture_source(url, byte_limit, preserve_empty=True)
 
 
 class Pipeline:
@@ -55,7 +64,7 @@ class Pipeline:
         queue: JobQueue,
         blobs,
         *,
-        capture=capture_source,
+        capture=capture_citation_page,
         analyze=analyze_text,
         verify=verify_pair,
         contextualize=analyze_context,
@@ -93,6 +102,7 @@ class Pipeline:
                 phase,
                 estimate_tokens(messages, max_output),
                 subject_id,
+                use_remaining_budget=phase == "verification",
             )
             deferred = {**job.payload.get("model_deferred", {})}
             key = stable_hash([phase, subject_id])
@@ -167,7 +177,7 @@ class Pipeline:
                     .where(
                         SourceFetch.project_id == lease.project_id,
                         SourceFetch.document_id == document_id,
-                        SourceFetch.status == "captured",
+                        SourceFetch.snapshot_id.is_not(None),
                         SourceFetch.job_id == job.id,
                     )
                     .limit(1)
@@ -206,6 +216,18 @@ class Pipeline:
                 continue
             body_hash = digest(captured.text.encode())
             quality = assess_text(captured.text)
+            page_type = source_page_type(url, captured.text)
+            quality["page_type"] = page_type
+            media = discover_media(
+                captured.raw, captured.encoding, captured.final_url, url,
+                body_text=captured.text,
+            )
+            if media:
+                quality["media"] = await save_media_previews(self.blobs, lease.project_id, media)
+            fetch_status = "captured" if captured.text.strip() else "empty_content"
+            if page_type in ("video", "search_listing"):
+                fetch_status = "non_article"
+                quality["evidence_usable"] = False
             representation = stable_hash(
                 [
                     body_hash,
@@ -236,6 +258,7 @@ class Pipeline:
                 text_blob=text_blob,
                 raw_blob=raw_blob,
                 quality=quality,
+                fetch_status=fetch_status,
             ):
                 from app.intelligence.visibility_flow import source_publication_time
 
@@ -279,7 +302,8 @@ class Pipeline:
                         snapshot_id=snapshot.id,
                         created_at=published_at or utcnow(),
                         final_url=captured.final_url,
-                        status="captured",
+                        status=fetch_status,
+                        error_code=None if fetch_status == "captured" else fetch_status,
                         http_status=captured.status,
                         audit_id=audit_id,
                         job_id=lease.id,
@@ -903,7 +927,7 @@ async def build_summary(db, run):
         ),
         "failed_responses": sum(bool(item["error"]) for item in response_map.values()),
         "sources": len(manifest["sources"]),
-        "captured_sources": sum(bool(s["snapshot_id"]) for s in manifest["sources"]),
+        "captured_sources": sum(bool(s.get("snapshot_id")) and s.get("fetch_status") == "captured" for s in manifest["sources"]),
         "unusable_source_observations": sum(
             bool(s["snapshot_id"]) and not usable_snapshot(s)
             for s in manifest["sources"]
@@ -922,7 +946,7 @@ async def build_summary(db, run):
     }
     coverage["complete"] = (
         coverage["complete"]
-        and not manifest["sources"]
+        and not coverage["unusable_source_observations"]
         and not coverage["pending_samples"]
         and not coverage["failed_samples"]
         and not coverage["partial_answers"]

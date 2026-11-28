@@ -7,6 +7,7 @@ from app.api.auth import get_current_user
 from app.intelligence.blob import LocalBlobStore, digest
 from app.intelligence.ingestion import prepare_run
 from app.intelligence.models import AuditSample, SourceFetch, SourceSnapshot
+from app.intelligence.source_media import preview_key
 from app.main import app
 from app.services.device_gateway_service import claim_task, complete_task, fail_task
 from tests.test_intelligence_sampling import new_audit, result_for
@@ -36,7 +37,8 @@ async def test_capture_records_page_filters_scope_and_attempts(
         0,
     )
     task, token = await claim_task(db_session, "CHAO", ["browser.prompt"])
-    result = result_for(task, "实际获得的回答")
+    original_answer = "🫘实际获得的回答【1】和[2]。\n参考来源：\n[1]文章"
+    result = result_for(task, original_answer)
     result["answer"]["status"] = "partial"
     result["sources"] = [
         {
@@ -95,7 +97,11 @@ async def test_capture_records_page_filters_scope_and_attempts(
 
     detail = (await client.get(f"{path}/samples/{received['id']}")).json()
     assert detail["prompt"]["text"] == "完整提示词"
-    assert detail["answer"]["text"] == "实际获得的回答"
+    assert detail["answer"]["text"] == original_answer
+    assert detail["answer"]["references"] == [
+        {"start": original_answer.index(marker), "end": original_answer.index(marker) + len(marker), "ordinal": ordinal}
+        for ordinal, marker in enumerate(("【1】", "[2]"), 1)
+    ]
     assert detail["source_panel"]["expectedCount"] == 3
     assert [source["archive"]["status"] for source in detail["sources"]] == [
         "not_started",
@@ -151,6 +157,9 @@ async def test_capture_citation_text_is_versioned_scoped_and_verified(
     blob = await blobs.put_immutable(
         "projects/p1/sources/article.txt.gz", gzip.compress(raw_text)
     )
+    image_bytes = b"verified preview fixture"
+    image_hash = digest(image_bytes)
+    image = await blobs.put_immutable(preview_key("p1", image_hash), image_bytes)
     snapshot = SourceSnapshot(
         project_id="p1",
         document_id=document_id,
@@ -160,6 +169,8 @@ async def test_capture_citation_text_is_versioned_scoped_and_verified(
         text_sha256=blob.sha256,
         completeness="partial",
         extractor_version="test-v1",
+        quality={"media": [{"ordinal": 1, "kind": "image", "url": "https://example.com/image.png", "text_offset": 3,
+                            "preview_status": "saved", "preview_sha256": image_hash}]},
     )
     db_session.add(snapshot)
     await db_session.flush()
@@ -179,6 +190,7 @@ async def test_capture_citation_text_is_versioned_scoped_and_verified(
     listing = (await client.get(path.rsplit("/", 1)[0])).json()
     assert listing["items"][0]["archived_count"] == 1
     assert detail["sources"][0]["archive"]["snapshot_id"] == snapshot.id
+    assert detail["sources"][0]["archive"]["has_media"] is True
     assert detail["sources"][1]["url"] is None
     assert detail["sources"][1]["archive"]["reason"] == "link_unsupported"
     assert blob.key not in str(detail)
@@ -188,11 +200,21 @@ async def test_capture_citation_text_is_versioned_scoped_and_verified(
     saved = await client.get(text_path, params=params)
     assert saved.status_code == 200
     assert saved.json()["text"] == raw_text.decode()
+    assert saved.json()["media"] == [{"ordinal": 1, "kind": "image", "label": "", "url": "https://example.com/image.png",
+                                      "text_offset": 3, "has_preview": True}]
+    image_path = f"{path}/sources/1/media/1"
+    preview = await client.get(image_path, params=params)
+    assert preview.status_code == 200 and preview.content == image_bytes
+    assert preview.headers["content-type"] == "image/webp"
+    assert (await client.get(f"{path}/sources/2/media/1", params=params)).status_code == 404
     assert (
         await client.get(f"{path}/sources/2/text", params=params)
     ).status_code == 404
     project_user["pid"] = "p2"
     assert (await client.get(text_path, params=params)).status_code == 403
+    assert (await client.get(image_path, params=params)).status_code == 403
     project_user["pid"] = "p1"
+    blobs.path(image.key).write_bytes(b"changed")
+    assert (await client.get(image_path, params=params)).status_code == 409
     blobs.path(blob.key).write_bytes(b"changed")
     assert (await client.get(text_path, params=params)).status_code == 409

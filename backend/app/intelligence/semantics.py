@@ -151,6 +151,53 @@ def safe_validation_fields(error):
     ]
 
 
+def recover_semantic_items(text, value, arrays, error):
+    errors_by_item = {}
+    for issue in error.errors(include_input=False, include_url=False):
+        path = issue["loc"]
+        if (len(path) < 2 or path[0] not in arrays or not isinstance(path[1], int)
+                or issue["type"] == "extra_forbidden"):
+            raise SemanticOutputError(safe_validation_fields(error)) from None
+        errors_by_item.setdefault(path[:2], []).append(issue)
+
+    repaired_value = dict(value)
+    original_positions = {}
+    discarded, repairs = [], []
+    for field in arrays:
+        selected, positions = [], []
+        for index, item in enumerate(value[field]):
+            issues = errors_by_item.get((field, index))
+            if issues:
+                offsets_only = all(
+                    len(issue["loc"]) == 3
+                    and issue["loc"][2] in ("start", "end")
+                    and issue["type"] in ("int_type", "missing")
+                    for issue in issues
+                )
+                quote = item.get("quote") if isinstance(item, dict) else None
+                start = text.find(quote) if offsets_only and isinstance(quote, str) and quote else -1
+                if start >= 0 and text.find(quote, start + 1) < 0:
+                    item = {**item, "start": start, "end": start + len(quote)}
+                    repairs.append({"path": [field, index], "code": "offset_from_verbatim"})
+                else:
+                    discarded.append({"path": [field, index], "code": "item_schema_invalid"})
+                    continue
+            selected.append(item)
+            positions.append(index)
+        repaired_value[field] = selected
+        original_positions[field] = positions
+
+    result = checked_result(text, repaired_value)
+    if discarded and not any(result[field] for field in arrays if field != "topics"):
+        raise SemanticOutputError(safe_validation_fields(error)) from None
+    for notice in result["rejected_items"] + result["span_repairs"]:
+        field, index = notice["path"]
+        notice["path"][1] = original_positions[field][index]
+    result["rejected_items"].extend(discarded)
+    result["rejected_spans"] += len(discarded)
+    return result, repairs
+
+
 def decode_semantic(text, content):
     # Accept one unambiguous JSON fence; do not extract guessed substrings.
     try:
@@ -192,7 +239,11 @@ def decode_semantic(text, content):
                 unit["conditions"] = [unit["conditions"]]
                 repairs.append({"path": ["information_units", index, "conditions"],
                                 "code": "string_to_singleton"})
-        result = checked_result(text, value)
+        try:
+            result = checked_result(text, value)
+        except ValidationError as error:
+            result, item_repairs = recover_semantic_items(text, value, required, error)
+            repairs.extend(item_repairs)
         result["schema_repairs"] = repairs
         return result
     except ValidationError as error:

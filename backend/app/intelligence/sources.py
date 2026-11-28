@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import json
 import re
 import socket
 from dataclasses import dataclass
@@ -90,8 +91,12 @@ class VisibleText(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.suppressed: list[str] = []
         self.parts: list[str] = []
+        self.json_ld: list[str] = []
+        self.structured_parts: list[str] | None = None
 
     def handle_starttag(self, tag, attrs):
+        if tag == "script" and dict(attrs).get("type") == "application/ld+json":
+            self.structured_parts = []
         if tag in (
             "head",
             "title",
@@ -118,24 +123,51 @@ class VisibleText(HTMLParser):
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
+        if tag == "script" and self.structured_parts is not None:
+            self.json_ld.append("".join(self.structured_parts))
+            self.structured_parts = None
         if self.suppressed and tag == self.suppressed[-1]:
             self.suppressed.pop()
         elif not self.suppressed and tag in ("p", "div", "li", "section", "article"):
             self.parts.append("\n")
 
     def handle_data(self, data):
+        if self.structured_parts is not None:
+            self.structured_parts.append(data)
         if not self.suppressed:
             self.parts.append(data)
 
-    def text(self):
+    def text(self, end=None):
         return "\n".join(
             line
             for line in (
                 re.sub(r"[ \t]+", " ", line).strip()
-                for line in "".join(self.parts).splitlines()
+                for line in "".join(self.parts[:end]).splitlines()
             )
             if line
         )
+
+    def article_body(self):
+        types = {"Article", "NewsArticle", "BlogPosting", "TechArticle"}
+        for candidate in self.json_ld:
+            try:
+                root = json.loads(candidate)
+            except (ValueError, RecursionError):
+                continue
+            pending = list(root) if isinstance(root, list) else [root]
+            for node in pending:
+                if not isinstance(node, dict):
+                    continue
+                node_type = node.get("@type")
+                names = node_type if isinstance(node_type, list) else [node_type]
+                body = node.get("articleBody")
+                if isinstance(body, str) and body.strip() and any(
+                    isinstance(name, str) and name.rsplit("/", 1)[-1] in types for name in names
+                ):
+                    return body.strip()
+                if isinstance(node.get("@graph"), list):
+                    pending.extend(node["@graph"])
+        return ""
 
 
 async def capture_source(
@@ -145,6 +177,8 @@ async def capture_source(
     timeout_seconds: int = 30,
     max_redirects: int = 5,
     html_only: bool = False,
+    preserve_empty: bool = False,
+    image_only: bool = False,
     user_agent: str = "GenilinkCitationBot/1.0",
 ) -> CapturedSource:
     async with asyncio.timeout(timeout_seconds):
@@ -193,6 +227,8 @@ async def capture_source(
                     supported_types = ("text/html", "application/xhtml+xml")
                     if not html_only:
                         supported_types += ("text/plain",)
+                    if image_only:
+                        supported_types = ("image/jpeg", "image/png", "image/webp", "image/gif")
                     if mime not in supported_types:
                         raise SourceUnavailable("unsupported_format", 200)
                     if response.headers.get(
@@ -205,11 +241,18 @@ async def capture_source(
                             raise SourceUnavailable("source_too_large", 200)
                         data.extend(chunk)
                     raw = bytes(data)
+                    if image_only:
+                        return CapturedSource(current, 200, raw, "", "unknown")
                     decoded = raw.decode(response.encoding or "utf-8", errors="replace")
                     parser = VisibleText()
                     parser.feed(decoded)
                     text = decoded.strip() if mime == "text/plain" else parser.text()
-                    if not text and not html_only:
+                    extractor = "html-visible-v1" if mime == "text/plain" else "html-visible-v2"
+                    if preserve_empty and not text and mime != "text/plain":
+                        text = parser.article_body()
+                        if text:
+                            extractor = "public-jsonld-article-v1"
+                    if not text and not html_only and not preserve_empty:
                         raise SourceUnavailable("empty_content", 200)
                     # A successful HTTP request does not prove full article coverage.
                     return CapturedSource(
@@ -218,9 +261,7 @@ async def capture_source(
                         raw,
                         text,
                         "unknown",
-                        extractor_version="html-visible-v1"
-                        if mime == "text/plain"
-                        else "html-visible-v2",
+                        extractor_version=extractor,
                         encoding=response.encoding or "utf-8",
                     )
         raise SourceUnavailable("redirect_limit")

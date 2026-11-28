@@ -65,6 +65,10 @@ class Source(StrictFact):
     url_resolution: Literal[
         "exact", "site_root", "candidate", "unavailable", "unknown"
     ] = Field(alias="urlResolution")
+    resolution_reason: Literal[
+        "device_read_failed", "card_open_failed", "copy_link_failed",
+        "share_unavailable", "link_timeout", "link_unresolved"
+    ] | None = Field(default=None, alias="resolutionReason")
     answer_anchor: tuple[StrictInt, StrictInt] | None = Field(default=None, alias="answerAnchor")
 
 
@@ -116,6 +120,8 @@ class CaptureV2(StrictFact):
                 "Expected source count cannot be lower than observed count"
             )
         for source in self.sources:
+            if source.resolution_reason and source.url_resolution != "unavailable":
+                raise ValueError("Link failures require an unavailable URL")
             if source.url_resolution == "exact" and not source.url:
                 raise ValueError("Exact URL requires a URL")
             if source.answer_anchor and not (

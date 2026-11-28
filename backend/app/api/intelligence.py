@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi.responses import Response
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,7 @@ from app.intelligence.capture_contract import AnalysisRetry, SamplingStart, Sour
 from app.intelligence.capture_records import (
     CaptureState,
     capture_record,
+    capture_source_preview,
     capture_source_text,
     list_capture_records,
     sample_state,
@@ -1332,6 +1334,21 @@ async def get_capture_source_text(
     return await capture_source_text(
         db, audit.project_id, audit_id, sample_id, ordinal, snapshot_id
     )
+
+
+@router.get("/audits/{audit_id}/capture/samples/{sample_id}/sources/{ordinal}/media/{media_ordinal}")
+async def get_capture_source_preview(
+    audit_id: int,
+    sample_id: str = Path(pattern=r"^[a-f0-9]{32}$"),
+    ordinal: int = Path(ge=1, le=200),
+    media_ordinal: int = Path(ge=1, le=24),
+    snapshot_id: str = Query(pattern=r"^[a-f0-9]{32}$"),
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    audit = await get_audit_for_project(db, user, audit_id)
+    body = await capture_source_preview(db, audit.project_id, audit_id, sample_id, ordinal, snapshot_id, media_ordinal)
+    return Response(body, media_type="image/webp", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 def require_writer(user: dict):
