@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
     paths: ['backend/**', 'deploy/**', 'tests/test_intelligence*.py', 'compose.intelligence*.yml', '.github/workflows/backend-ci.yml', '.github/workflows/intelligence-storage-check.yml', '.github/workflows/intelligence-deploy.yml']
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full current main SHA to verify and publish again
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -39,6 +45,17 @@ jobs:
       AISCOPE_INTELLIGENCE_TEST_DATABASE_URL: mysql+aiomysql://root:ci-password@127.0.0.1:3306/intelligence_ci
     steps:
       - uses: actions/checkout@v4
+      - name: Verify manual build targets the current main revision
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$RELEASE_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -108,12 +125,12 @@ jobs:
           docker compose -f compose.intelligence-runtime.yml --profile worker --profile maintenance config --quiet
           docker compose -f compose.intelligence-runtime.yml -f compose.intelligence-production.yml --profile worker --profile maintenance config --quiet
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish verified SHA image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: docker push ghcr.io/yyangwan/geo-visibility-analyze:${{ github.sha }}

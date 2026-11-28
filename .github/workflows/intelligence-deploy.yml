@@ -39,8 +39,9 @@ jobs:
           test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           RUN=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow backend-ci.yml \
-            --branch main --event push --commit "$RELEASE_SHA" --status success \
-            --limit 10 --json databaseId --jq '.[0].databaseId // empty')
+            --branch main --commit "$RELEASE_SHA" --status success \
+            --limit 10 --json databaseId,event \
+            --jq '[.[] | select(.event == "push" or .event == "workflow_dispatch")][0].databaseId // empty')
           test -n "$RUN"
       - name: Configure dedicated transfer access
         env:
