@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.1.0] - 2026-11-28
+
+### Added
+- Archive bounded image and video-cover previews with original links and verified positions when available. Serve citation previews only for the matching project, sample and source snapshot.
+- Expose matched citation positions and per-reference capture diagnostics for collected responses.
+
+### Fixed
+- Recover public structured article text, distinguish non-article sources, and report archive and analysis coverage using the actual captured material.
+- Retain valid neighboring evidence when individual model items fail and repair offsets only for uniquely matched verbatim quotes.
+
 ## [1.4.0.1] - 2026-11-26
 
 ### Fixed

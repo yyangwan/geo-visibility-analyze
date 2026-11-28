@@ -70,11 +70,32 @@ def test_explicit_null_does_not_count_as_a_checked_empty_array(field):
 
 
 @pytest.mark.parametrize("offset", [False, "0", 0.0])
-def test_semantic_offsets_do_not_coerce_booleans_strings_or_floats(offset):
+def test_invalid_offsets_are_recomputed_from_a_unique_quote(offset):
     value = payload([])
     value["entities"][0]["start"] = offset
+    result = decode_semantic("🧭云衡", json.dumps(value))
+    assert result["entities"][0]["start"] == 1
+    assert result["entities"][0]["end"] == 3
+    assert result["schema_repairs"] == [
+        {"path": ["entities", 0], "code": "offset_from_verbatim"}
+    ]
     with pytest.raises(SemanticOutputError):
-        decode_semantic("云衡", json.dumps(value))
+        decode_semantic("云衡云衡", json.dumps(value))
+
+
+def test_invalid_item_kind_does_not_discard_a_grounded_neighbor():
+    value = payload([])
+    quote = "云衡限一年"
+    value["information_units"] = [
+        {"kind": "invented", "quote": quote, "start": 0, "end": len(quote)},
+        {"kind": "risk", "quote": quote, "start": 0, "end": len(quote), "conditions": ["限一年"]},
+    ]
+    result = decode_semantic(quote, json.dumps(value))
+    assert [item["kind"] for item in result["information_units"]] == ["risk"]
+    assert result["rejected_spans"] == 1
+    assert result["rejected_items"] == [
+        {"path": ["information_units", 0], "code": "item_schema_invalid"}
+    ]
 
 
 @pytest.mark.parametrize(

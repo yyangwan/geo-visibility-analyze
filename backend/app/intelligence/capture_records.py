@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 
 from app.intelligence.blob import IntegrityError, configured_store, digest
+from app.intelligence.citation_context import answer_reference_markers
 from app.intelligence.models import (
     AnalysisJob,
     AuditSample,
@@ -18,6 +19,7 @@ from app.intelligence.models import (
     SourceFetch,
     SourceSnapshot,
 )
+from app.intelligence.source_media import preview_key
 from app.intelligence.sources import SourceBlocked, normalized_url
 from app.models.device_gateway import DeviceTask
 from app.utils.timezone import utc_isoformat
@@ -90,6 +92,7 @@ def archived_source_count(project_id, audit_id):
             SourceFetch.project_id == project_id,
             SourceFetch.audit_id == audit_id,
             SourceFetch.document_id == CitationObservation.document_id,
+            SourceFetch.status == "captured",
         )
         .exists()
     )
@@ -215,11 +218,16 @@ def export_source(source, observation, fetch, snapshot, queued):
     url = safe_link(source["url"])
     if snapshot is not None:
         archive = {
-            "status": "archived",
+            "status": "archived" if fetch.status == "captured" else "unavailable",
             "snapshot_id": snapshot.id,
             "archived_at": utc_isoformat(fetch.created_at),
             "completeness": snapshot.completeness,
         }
+        if fetch.status != "captured":
+            archive["reason"] = "source_unavailable"
+        archive["page_type"] = (snapshot.quality or {}).get("page_type")
+        if (snapshot.quality or {}).get("media"):
+            archive["has_media"] = True
     elif source["urlResolution"] != "exact" or source["kind"] == "named_inference":
         archive = {"status": "unavailable", "reason": "link_unresolved"}
     elif url is None:
@@ -239,12 +247,15 @@ def export_source(source, observation, fetch, snapshot, queued):
             if fetch and fetch.status == "blocked"
             else "source_unavailable",
         }
+    if fetch and fetch.error_code:
+        archive["failure_code"] = fetch.error_code
     return {
         "ordinal": source["ordinal"],
         "kind": source["kind"],
         "title": source["title"],
         "url": url,
         "url_resolution": source["urlResolution"],
+        "resolution_reason": source.get("resolutionReason"),
         "snippet": source["snippet"],
         "archive": archive,
     }
@@ -355,6 +366,13 @@ async def capture_record(db, project_id, audit_id, sample_id):
             "observed_at": utc_isoformat(response.observed_at),
         }
         sources = await captured_sources(db, project_id, audit_id, response)
+        answer["references"] = [
+            {"start": start, "end": end, "ordinal": ordinal}
+            for start, end, ordinal in answer_reference_markers(
+                {"text": response.text, "platform": sample.platform},
+                [source for source in sources if source["kind"] == "answer_reference"],
+            )[:1000]
+        ]
         from app.intelligence.visibility_flow import find_flow
 
         flow = await find_flow(db, project_id, audit_id)
@@ -390,9 +408,7 @@ async def capture_record(db, project_id, audit_id, sample_id):
     }
 
 
-async def capture_source_text(
-    db, project_id, audit_id, sample_id, ordinal, snapshot_id
-):
+async def get_capture_snapshot(db, project_id, audit_id, sample_id, ordinal, snapshot_id):
     _, _, response = await get_sample(db, project_id, audit_id, sample_id)
     if response is None:
         raise HTTPException(404, "Saved citation not found")
@@ -417,7 +433,25 @@ async def capture_source_text(
     ).one_or_none()
     if row is None:
         raise HTTPException(404, "Saved citation not found")
-    fetch, snapshot = row
+    return row
+
+
+async def capture_source_preview(db, project_id, audit_id, sample_id, ordinal, snapshot_id, media_ordinal):
+    _, snapshot = await get_capture_snapshot(db, project_id, audit_id, sample_id, ordinal, snapshot_id)
+    media = next((item for item in (snapshot.quality or {}).get("media", []) if item["ordinal"] == media_ordinal), None)
+    if media is None or media.get("preview_status") != "saved":
+        raise HTTPException(404, "Saved citation preview not found")
+    checksum = media["preview_sha256"]
+    try:
+        return await configured_store().get(preview_key(project_id, checksum), checksum)
+    except (IntegrityError, FileNotFoundError):
+        raise HTTPException(409, "Saved citation preview cannot be verified") from None
+    except Exception:
+        raise HTTPException(503, "Citation material storage is temporarily unavailable") from None
+
+
+async def capture_source_text(db, project_id, audit_id, sample_id, ordinal, snapshot_id):
+    fetch, snapshot = await get_capture_snapshot(db, project_id, audit_id, sample_id, ordinal, snapshot_id)
     try:
         data = await configured_store().get(snapshot.text_key, snapshot.text_sha256)
     except (IntegrityError, FileNotFoundError):
@@ -432,9 +466,23 @@ async def capture_source_text(
         raise HTTPException(409, "Saved citation text cannot be verified") from None
     if digest(text.encode()) != snapshot.body_hash:
         raise HTTPException(409, "Saved citation text cannot be verified")
+    media = [
+        {
+            "ordinal": item["ordinal"],
+            "kind": item["kind"],
+            "label": item.get("label", ""),
+            "url": safe_link(item.get("url") or item.get("page_url")),
+            "text_offset": item.get("text_offset"),
+            "has_preview": item.get("preview_status") == "saved",
+        }
+        for item in (snapshot.quality or {}).get("media", [])
+        if item.get("kind") in {"image", "video"}
+        and (item.get("url") or item.get("page_url") or item.get("preview_status") == "saved")
+    ]
     return {
         "snapshot_id": snapshot.id,
         "text": text,
         "archived_at": utc_isoformat(fetch.created_at),
         "completeness": snapshot.completeness,
+        "media": media,
     }

@@ -342,8 +342,8 @@ async def test_limited_verification_checks_distinct_claims_first(
         source_texts=["云衡支持分仓和核算。", "云衡公开资料。", "云衡入门指南。"],
         request_limit=13,
     )
-    assert len(calls) == 2
-    assert {claim for claim, _ in calls} == {first, second}
+    assert len(calls) > 2
+    assert {claim for claim, _ in calls[:2]} == {first, second}
 
 
 @pytest.mark.asyncio

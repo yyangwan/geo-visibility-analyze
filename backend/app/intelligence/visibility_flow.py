@@ -290,6 +290,7 @@ async def archive_coverage(db, project_id, audit_id):
             SourceFetch.project_id == project_id,
             SourceFetch.audit_id == audit_id,
             SourceFetch.document_id == CitationObservation.document_id,
+            SourceFetch.status == "captured",
         )
         .exists()
     )
